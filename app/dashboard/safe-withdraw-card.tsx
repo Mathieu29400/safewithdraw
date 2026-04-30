@@ -28,6 +28,7 @@ import { AnimatedCurrency } from "@/lib/animated-currency";
 import type { CashflowResult } from "@/lib/cashflow";
 import { useAnimatedNumber } from "@/lib/use-animated-number";
 import { useSafeWithdraw } from "@/lib/use-safe-withdraw";
+import type { PeriodRange } from "@/lib/use-safe-withdraw";
 
 /** 700 ms — matches AnimatedCurrency default and the spec window 500–800 ms. */
 const HERO_ANIM_DURATION_MS = 700;
@@ -40,10 +41,26 @@ type Props = {
    * skeleton state to avoid flashing the wrong KPI.
    */
   advancedMode?: boolean;
+  /**
+   * Start of the current URSSAF period (ISO timestamp).
+   * - `undefined` → period not yet resolved; hold the hook in skeleton mode
+   *   to prevent flashing all-time data before the period is known.
+   * - `null` → no period row; compute KPI against all-time transactions
+   *   (backwards-compatible for users who have never reset their period).
+   * - `string` → filter transactions to `created_at >= periodStart`.
+   */
+  periodStart?: string | null;
 };
 
-export function SafeWithdrawCard({ userId, advancedMode }: Props) {
-  const state = useSafeWithdraw(userId, undefined, { advancedMode });
+export function SafeWithdrawCard({ userId, advancedMode, periodStart }: Props) {
+  // When `periodStart` is undefined the period hasn't been fetched yet —
+  // pass null as userId to keep the hook in its loading state and avoid
+  // briefly showing stale all-time figures before the period resolves.
+  const effectiveUserId = periodStart !== undefined ? userId : null;
+  const period: PeriodRange | undefined = periodStart
+    ? { start: periodStart }
+    : undefined;
+  const state = useSafeWithdraw(effectiveUserId, period, { advancedMode });
 
   if (state.status === "loading" || state.status === "no-urssaf-profile") {
     return <SkeletonSection showExpensesSlot={advancedMode === true} />;

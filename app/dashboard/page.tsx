@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { supabase } from "@/lib/supabase";
-import type { Expense, Transaction } from "@/lib/database.types";
+import type { Expense, PeriodType, Transaction } from "@/lib/database.types";
+import { useCurrentPeriod } from "@/lib/use-current-period";
 
 import { AddExpenseDialog } from "./add-expense-dialog";
 import {
@@ -38,6 +39,19 @@ export default function DashboardPage() {
   const [dialogType, setDialogType] = useState<TransactionType | null>(null);
   const [expenseDialogOpen, setExpenseDialogOpen] = useState(false);
   const [newPeriodDialogOpen, setNewPeriodDialogOpen] = useState(false);
+
+  // Declaration frequency from urssaf_profile — needed when inserting new periods.
+  const [declarationFrequency, setDeclarationFrequency] =
+    useState<PeriodType>("monthly");
+
+  // Current URSSAF period: the most recent row in `periods` for this user.
+  // `undefined` while loading so SafeWithdrawCard stays in skeleton mode and
+  // we never flash all-time data before the period is known.
+  const currentPeriodState = useCurrentPeriod(userId);
+  const periodStart =
+    currentPeriodState.status === "ready"
+      ? currentPeriodState.periodStart
+      : undefined;
 
   const [history, setHistory] = useState<HistoryTransaction[] | null>(null);
   const [expenses, setExpenses] = useState<HistoryExpense[] | null>(null);
@@ -73,6 +87,26 @@ export default function DashboardPage() {
       .maybeSingle()
       .then(({ data }) => {
         if (!cancelled) setAdvancedMode(data?.advanced_mode ?? false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  // Read the user's URSSAF declaration frequency so we can tag new periods
+  // with the correct type when the user resets their period.
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    supabase
+      .from("urssaf_profile")
+      .select("declaration_frequency")
+      .eq("user_id", userId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled && data?.declaration_frequency) {
+          setDeclarationFrequency(data.declaration_frequency as PeriodType);
+        }
       });
     return () => {
       cancelled = true;
@@ -223,6 +257,7 @@ export default function DashboardPage() {
         <SafeWithdrawCard
           userId={userId}
           advancedMode={advancedMode ?? undefined}
+          periodStart={periodStart}
         />
 
         <CashflowChart
@@ -340,7 +375,17 @@ export default function DashboardPage() {
           open={newPeriodDialogOpen}
           onOpenChange={setNewPeriodDialogOpen}
           onConfirm={() => {
-            // Logic will be implemented later.
+            // Insert a new period row. The `useCurrentPeriod` realtime
+            // subscription will pick up the INSERT and update `periodStart`,
+            // which causes `useSafeWithdraw` to re-scope to the new period.
+            // Historical data (transactions, withdrawals, previous periods)
+            // is never touched — only the KPI's lower bound changes.
+            void supabase.from("periods").insert({
+              user_id: userId,
+              type: declarationFrequency,
+              start_date: new Date().toISOString(),
+              current_ca: 0,
+            });
           }}
         />
       )}
