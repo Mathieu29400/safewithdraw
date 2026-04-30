@@ -121,16 +121,19 @@ export type Database = {
           user_id: string;
           activity_type: string;
           urssaf_rate: number;
+          declaration_frequency: PeriodType;
         };
         Insert: {
           user_id: string;
           activity_type: string;
           urssaf_rate: number;
+          declaration_frequency?: PeriodType;
         };
         Update: {
           user_id?: string;
           activity_type?: string;
           urssaf_rate?: number;
+          declaration_frequency?: PeriodType;
         };
         Relationships: [
           {

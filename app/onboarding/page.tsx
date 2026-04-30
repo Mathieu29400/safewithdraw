@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import type { PeriodType } from "@/lib/database.types";
 import { ensureProfile } from "@/lib/ensure-profile";
 import { supabase } from "@/lib/supabase";
 import {
@@ -24,6 +25,8 @@ export default function OnboardingPage() {
   const [selectedId, setSelectedId] = useState<SelectedActivityId | null>(null);
   const [customName, setCustomName] = useState("");
   const [customRatePercent, setCustomRatePercent] = useState("");
+  const [declarationFrequency, setDeclarationFrequency] =
+    useState<PeriodType>("monthly");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -122,6 +125,7 @@ export default function OnboardingPage() {
       user_id: userId,
       activity_type: activityType,
       urssaf_rate: urssafRate,
+      declaration_frequency: declarationFrequency,
     });
 
     if (insertError) {
@@ -200,6 +204,36 @@ export default function OnboardingPage() {
                 </div>
               </div>
             </fieldset>
+
+            <div className="border-t border-white/10 pt-8">
+              <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-emerald-300 ring-1 ring-emerald-400/20">
+                Étape 2
+              </span>
+              <h2 className="mt-4 text-xl font-semibold tracking-tight text-slate-50 sm:text-2xl">
+                À quelle fréquence déclares-tu ton URSSAF&nbsp;?
+              </h2>
+              <fieldset className="mt-6">
+                <legend className="sr-only">Fréquence de déclaration URSSAF</legend>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5">
+                  <FrequencyCard
+                    value="monthly"
+                    label="Mensuel"
+                    description="Déclaration et cotisations chaque mois"
+                    emoji="📅"
+                    selected={declarationFrequency === "monthly"}
+                    onSelect={() => setDeclarationFrequency("monthly")}
+                  />
+                  <FrequencyCard
+                    value="quarterly"
+                    label="Trimestriel"
+                    description="Déclaration et cotisations par trimestre"
+                    emoji="📆"
+                    selected={declarationFrequency === "quarterly"}
+                    onSelect={() => setDeclarationFrequency("quarterly")}
+                  />
+                </div>
+              </fieldset>
+            </div>
 
             <p className="text-xs text-slate-500">
               Les taux indiqués sont ceux du régime micro-entrepreneur. Si vous
@@ -402,6 +436,48 @@ function CustomActivityCard({
             </div>
           </div>
         )}
+      </div>
+    </label>
+  );
+}
+
+function FrequencyCard({
+  value,
+  label,
+  description,
+  emoji,
+  selected,
+  onSelect,
+}: {
+  value: PeriodType;
+  label: string;
+  description: string;
+  emoji: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <label
+      className={`relative flex h-full cursor-pointer items-start gap-3 rounded-2xl p-5 transition-all duration-200 ease-out motion-safe:active:scale-[0.98] ${
+        selected
+          ? "bg-emerald-500/[0.10] ring-2 ring-emerald-400/55 shadow-[0_14px_36px_-12px_rgba(16,185,129,0.65)] motion-safe:scale-[1.02]"
+          : "bg-slate-900/55 ring-1 ring-white/10 shadow-[0_8px_28px_-18px_rgba(2,6,23,0.8)] hover:bg-slate-900/70 hover:ring-white/20 motion-safe:hover:scale-[1.01]"
+      }`}
+    >
+      <input
+        type="radio"
+        name="declaration_frequency"
+        value={value}
+        checked={selected}
+        onChange={onSelect}
+        className="sr-only"
+      />
+      <span aria-hidden className="text-2xl leading-none">
+        {emoji}
+      </span>
+      <div className="min-w-0 flex-1">
+        <span className="text-sm font-medium text-slate-100">{label}</span>
+        <p className="mt-1 text-xs text-slate-400">{description}</p>
       </div>
     </label>
   );

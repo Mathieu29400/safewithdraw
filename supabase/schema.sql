@@ -76,12 +76,20 @@ create index if not exists expenses_user_created_idx
 -- =============================================================================
 -- The user's URSSAF configuration (one row per user).
 -- `urssaf_rate` is stored as a decimal (e.g. 0.2180 for 21.80%).
+-- `declaration_frequency` is `monthly` or `quarterly` (URSSAF declaration cadence).
 
 create table if not exists public.urssaf_profile (
   user_id       uuid          primary key references public.profiles(id) on delete cascade,
   activity_type text          not null,
-  urssaf_rate   numeric(5,4)  not null check (urssaf_rate >= 0 and urssaf_rate <= 1)
+  urssaf_rate   numeric(5,4)  not null check (urssaf_rate >= 0 and urssaf_rate <= 1),
+  declaration_frequency text not null default 'monthly'
+    check (declaration_frequency in ('monthly', 'quarterly'))
 );
+
+-- Backfill `declaration_frequency` on pre-existing databases.
+alter table public.urssaf_profile
+  add column if not exists declaration_frequency text not null default 'monthly'
+    check (declaration_frequency in ('monthly', 'quarterly'));
 
 -- =============================================================================
 -- 4. periods
