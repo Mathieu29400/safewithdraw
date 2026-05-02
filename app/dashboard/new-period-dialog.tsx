@@ -86,8 +86,9 @@ export function NewPeriodDialog({ open, onOpenChange, onConfirm }: Props) {
           <p className="text-sm leading-relaxed text-slate-300">
             Tu es sur le point de clôturer ta période URSSAF actuelle et
             d&apos;en démarrer une nouvelle. Le chiffre d&apos;affaires,
-            l&apos;URSSAF estimée, la réserve et les retraits de la période
-            repartiront de zéro. Ton historique global sera conservé.
+            l&apos;URSSAF estimée, la réserve recommandée et les retraits de la
+            période repartiront de zéro dans la vue principale — ton historique
+            reste disponible tel quel.
           </p>
         </div>
 

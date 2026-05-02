@@ -30,7 +30,7 @@ import type { PeriodRange } from "./use-safe-withdraw";
 export type SafeWithdrawSeriesState =
   | { status: "loading" }
   | { status: "no-urssaf-profile" }
-  | { status: "ready"; points: CashflowPoint[] }
+  | { status: "ready"; points: CashflowPoint[]; urssafRate: number }
   | { status: "error"; error: string };
 
 export type UseSafeWithdrawSeriesOptions = {
@@ -163,7 +163,7 @@ export function useSafeWithdrawSeries(
           }
         }
 
-        setState({ status: "ready", points });
+        setState({ status: "ready", points, urssafRate: urssaf.urssaf_rate });
       } catch (err) {
         setState({
           status: "error",

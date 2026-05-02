@@ -45,7 +45,14 @@ type Props = {
   value: number;
   className?: string;
   positiveColor?: string;
+  /** Color used when 0 ≤ value ≤ warnThreshold. Requires warnThreshold. */
+  warningColor?: string;
   negativeColor?: string;
+  /**
+   * When set, values in [0, warnThreshold] use `warningColor` instead of
+   * `positiveColor`. Allows a three-state amber/yellow alert zone.
+   */
+  warnThreshold?: number;
   duration?: number;
 };
 
@@ -58,20 +65,25 @@ export function AnimatedCurrency({
   value,
   className = "",
   positiveColor = "text-emerald-50",
+  warningColor = "text-amber-200",
   negativeColor = "text-rose-100",
+  warnThreshold,
   duration = 700,
 }: Props) {
   const animated = useAnimatedNumber(value, duration, easeOutExpo);
 
-  // `isNegative` is derived from the *target* value, not the animated
-  // intermediate, so the color commits to its new state as soon as React
-  // receives the new prop — the transition then carries it there smoothly.
-  const isNegative = value < 0;
-  const colorClass = isNegative ? negativeColor : positiveColor;
+  // Color is derived from the *target* value so the transition commits to its
+  // new state as soon as React receives the new prop.
+  let colorClass: string;
+  if (value < 0) {
+    colorClass = negativeColor;
+  } else if (warnThreshold !== undefined && value <= warnThreshold) {
+    colorClass = warningColor;
+  } else {
+    colorClass = positiveColor;
+  }
 
   const formatted = FORMATTER.format(animated);
-  // aria-label carries the stable final value so screen-readers don't
-  // announce fractional intermediate digits.
   const ariaLabel = FORMATTER.format(value);
 
   return (

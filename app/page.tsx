@@ -78,7 +78,7 @@ export default function HomePage() {
             </p>
             <ul className="mt-4 space-y-2 text-sm text-slate-300">
               <li>• calcul URSSAF automatique</li>
-              <li>• réserve de sécurité</li>
+              <li>• réserve de sécurité recommandée (10 %)</li>
               <li>• mise à jour en temps réel</li>
             </ul>
           </div>
@@ -105,7 +105,7 @@ export default function HomePage() {
                   tone="negative"
                 />
                 <ProofTile
-                  label="Réserve"
+                  label="Réserve de sécurité recommandée"
                   value="−780,00 €"
                   tone="negative"
                 />
@@ -295,7 +295,7 @@ function ProofTile({
 
   return (
     <div className="rounded-lg bg-white/[0.03] p-3 ring-1 ring-white/10">
-      <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+      <p className="text-[10px] uppercase leading-tight tracking-[0.12em] text-slate-500 sm:tracking-[0.16em]">
         {label}
       </p>
       <p className={`mt-2 text-sm font-medium tabular-nums ${valueColor}`}>

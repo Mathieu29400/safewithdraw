@@ -139,6 +139,29 @@ export default function DashboardPage() {
   const isCurrentPeriod =
     view === "period" && selectedPeriod.kind === "current";
   const cardMode: "period" | "all-time" = view;
+
+  // Subtitle shown just below the hero label — "mois de mai 2026" or
+  // "trimestre avr. → juin 2026". Undefined in all-time view.
+  const cardPeriodSubtitle = useMemo<string | undefined>(() => {
+    if (view !== "period") return undefined;
+    if (selectedPeriod.kind === "current") {
+      if (!periodStart || !currentPeriodType) return undefined;
+      const label = periodLabel(periodStart, undefined, currentPeriodType, "standalone");
+      return currentPeriodType === "quarterly"
+        ? `Trimestre ${label}`
+        : `Mois de ${label}`;
+    }
+    const label = periodLabel(
+      selectedPeriod.startDate,
+      selectedPeriod.endDate,
+      selectedPeriod.type,
+      "standalone",
+    );
+    return selectedPeriod.type === "quarterly"
+      ? `Trimestre ${label}`
+      : `Mois de ${label}`;
+  }, [view, selectedPeriod, periodStart, currentPeriodType]);
+
   const cardPeriod: PeriodRange | undefined = useMemo(() => {
     if (view === "all-time") return undefined;
     if (selectedPeriod.kind === "current") {
@@ -482,6 +505,8 @@ export default function DashboardPage() {
           mode={cardMode}
           period={cardPeriod}
           isCurrentPeriod={isCurrentPeriod}
+          periodSubtitle={cardPeriodSubtitle}
+          periodType={currentPeriodType ?? undefined}
         />
 
         <CashflowChart
@@ -489,6 +514,8 @@ export default function DashboardPage() {
           advancedMode={advancedMode ?? undefined}
           period={cardMode === "period" ? cardPeriod : undefined}
           emptyVariant={chartEmptyVariant}
+          isCurrentPeriod={isCurrentPeriod}
+          periodType={currentPeriodType ?? undefined}
         />
 
         <section className="space-y-5">
@@ -1290,7 +1317,7 @@ function PreviousPeriodRow({ period }: { period: PreviousPeriodSummary }) {
           tone="negative"
         />
         <PreviousPeriodMetric
-          label="Réserve"
+          label="Réserve de sécurité recommandée"
           amount={result.reserve}
           tone="negative"
         />
@@ -1322,7 +1349,7 @@ function PreviousPeriodMetric({
   const sign = tone === "positive" || amount === 0 ? "" : "−";
   return (
     <div className="min-w-0">
-      <dt className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+      <dt className="text-[10px] uppercase leading-tight tracking-[0.16em] text-slate-500">
         {label}
       </dt>
       <dd

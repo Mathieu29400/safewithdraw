@@ -4,18 +4,27 @@
  * CashflowChart — the dashboard's main fintech chart.
  *
  * Stripe-style minimal area chart of the safe-withdrawal balance over time.
- * Single primary line. No grid, no companion series, no legend — just the
- * curve, soft gradient, and a clean tooltip on hover.
+ * When the chart is scoped to the CURRENT period (isCurrentPeriod = true), a
+ * second dashed series is appended showing the projected safe balance through
+ * to the end of the URSSAF period. The projection is visually secondary:
+ * dashed stroke, no fill area, labelled "Projection (estimation)" in the
+ * tooltip.
  *
- * Scoping: the chart follows the dashboard's view toggle.
- *   - "Période actuelle" → parent passes `period = { start: periodStart }`
- *     and the series is filtered to the current URSSAF period only.
- *   - "All-time"         → parent omits `period` and the chart spans the
- *     full user history.
+ * Projection data logic:
+ *   - Take the last actual data point's CA and safe balance.
+ *   - Compute `caPerDay = lastCA / elapsedDays` where `elapsedDays` is days
+ *     from period start to the last data point.
+ *   - For each future day up to period end:
+ *       proj = lastSafe + caPerDay × daysFromLast × netRate
+ *     where `netRate = 1 - urssafRate - SECURITY_RESERVE_RATE`.
+ *   - The first projection point is placed AT the last actual point so the
+ *     two curves join seamlessly.
  *
- * Data source: `useSafeWithdrawSeries`, which delegates the math to
- * `computeSafeWithdrawSeries` in the engine. NO formula lives here — the
- * chart is purely a viewport on the engine's output.
+ * The projection is suppressed when:
+ *   - CA is 0 (no pace to extrapolate)
+ *   - Less than 1 day has elapsed since period start
+ *   - The period is already finished (no future days left)
+ *   - `isCurrentPeriod` is false or `periodType` is not provided
  */
 
 import { useMemo } from "react";
@@ -28,6 +37,8 @@ import {
   YAxis,
 } from "recharts";
 
+import { SECURITY_RESERVE_RATE } from "@/lib/cashflow";
+import type { PeriodType } from "@/lib/database.types";
 import type { PeriodRange } from "@/lib/use-safe-withdraw";
 import { useSafeWithdrawSeries } from "@/lib/use-safe-withdraw-series";
 
@@ -45,6 +56,14 @@ type Props = {
    * generic "pas assez d'historique" message used for all-time.
    */
   emptyVariant?: "all-time" | "current-period";
+  /**
+   * When true AND `periodType` is provided, a dashed projection series is
+   * rendered from the last actual data point to the end of the URSSAF
+   * period.
+   */
+  isCurrentPeriod?: boolean;
+  /** Required for the projection end-date computation (monthly vs quarterly). */
+  periodType?: PeriodType;
 };
 
 export function CashflowChart({
@@ -52,6 +71,8 @@ export function CashflowChart({
   advancedMode,
   period,
   emptyVariant = "all-time",
+  isCurrentPeriod,
+  periodType,
 }: Props) {
   const state = useSafeWithdrawSeries(userId, { advancedMode, period });
 
@@ -73,18 +94,28 @@ export function CashflowChart({
     return <ChartEmpty variant={emptyVariant} />;
   }
 
-  return <ChartView points={state.points} />;
+  const showProjection =
+    isCurrentPeriod === true && periodType !== undefined && period !== undefined;
+
+  return (
+    <ChartView
+      points={state.points}
+      urssafRate={state.urssafRate}
+      period={showProjection ? period : undefined}
+      periodType={showProjection ? periodType : undefined}
+    />
+  );
 }
 
 function ChartEmpty({ variant }: { variant: "all-time" | "current-period" }) {
   const title =
     variant === "current-period"
       ? "Aucune transaction sur cette période"
-      : "Pas encore d’historique suffisant";
+      : "Pas encore d'historique suffisant";
   const subtitle =
     variant === "current-period"
-      ? "Ajoutez votre premier chiffre d’affaires depuis le début de cette période URSSAF pour voir le graphique apparaître."
-      : "Ajoutez au moins deux transactions sur des dates différentes pour voir l’évolution de votre montant retirable.";
+      ? "Ajoutez votre premier chiffre d'affaires depuis le début de cette période URSSAF pour voir le graphique apparaître."
+      : "Ajoutez au moins deux transactions sur des dates différentes pour voir l'évolution de votre montant retirable.";
   return (
     <ChartShell>
       <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
@@ -95,27 +126,107 @@ function ChartEmpty({ variant }: { variant: "all-time" | "current-period" }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+type CashflowPoint = { date: string; ts: number; ca: number; safe: number };
+
+function periodEndUTC(start: string, type: PeriodType): Date {
+  const d = new Date(start);
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth();
+  return type === "quarterly"
+    ? new Date(Date.UTC(y, m + 3, 1))
+    : new Date(Date.UTC(y, m + 1, 1));
+}
+
+/** Returns "YYYY-MM-DD" for a UTC date. */
+function toDateKey(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+type ChartRow = {
+  date: string;
+  safe: number | null;
+  proj: number | null;
+};
+
+function buildProjectionRows(
+  points: CashflowPoint[],
+  period: PeriodRange,
+  periodType: PeriodType,
+  urssafRate: number,
+): ChartRow[] | null {
+  const last = points[points.length - 1];
+  const periodStartMs = new Date(period.start).getTime();
+  const periodEndMs = periodEndUTC(period.start, periodType).getTime();
+
+  const elapsedDays = (last.ts - periodStartMs) / 86_400_000;
+  const remainingMs = periodEndMs - last.ts;
+  const remainingDays = remainingMs / 86_400_000;
+
+  if (elapsedDays < 1 || remainingDays < 1 || last.ca <= 0) return null;
+
+  const netRate = 1 - urssafRate - SECURITY_RESERVE_RATE;
+  const caPerDay = last.ca / elapsedDays;
+
+  // Actual rows — `proj` is null for all but the final (junction) point.
+  const rows: ChartRow[] = points.map((p, i) => ({
+    date: p.date,
+    safe: p.safe,
+    proj: i === points.length - 1 ? p.safe : null,
+  }));
+
+  // Projection rows — one per day from day+1 to period end (exclusive).
+  const lastTs = last.ts;
+  let day = 1;
+  while (true) {
+    const ms = lastTs + day * 86_400_000;
+    if (ms >= periodEndMs) break;
+    const projDate = toDateKey(new Date(ms));
+    const additionalCA = caPerDay * day;
+    const projSafe = last.safe + additionalCA * netRate;
+    rows.push({ date: projDate, safe: null, proj: projSafe });
+    day++;
+  }
+
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// ChartView
+// ---------------------------------------------------------------------------
+
 function ChartView({
   points,
+  urssafRate,
+  period,
+  periodType,
 }: {
-  points: ReadonlyArray<{ date: string; safe: number; ca: number }>;
+  points: ReadonlyArray<CashflowPoint>;
+  urssafRate: number;
+  period?: PeriodRange;
+  periodType?: PeriodType;
 }) {
-  // Pull the latest snapshot to colour the gradient based on current state.
   const latest = points[points.length - 1];
   const isOverdrawn = latest.safe < 0;
-
-  const data = useMemo(
-    () =>
-      points.map((p) => ({
-        date: p.date,
-        safe: p.safe,
-      })),
-    [points],
-  );
-
-  // Slightly brighter on dark canvas — these read crisper than the deeper
-  // emerald/rose tokens used elsewhere.
   const safeColor = isOverdrawn ? "#fb7185" : "#34d399";
+
+  const chartData = useMemo<ChartRow[]>(() => {
+    if (period && periodType) {
+      const projected = buildProjectionRows(
+        points as CashflowPoint[],
+        period,
+        periodType,
+        urssafRate,
+      );
+      if (projected) return projected;
+    }
+    return points.map((p) => ({ date: p.date, safe: p.safe, proj: null }));
+  }, [points, period, periodType, urssafRate]);
+
+  const hasProjection = chartData.some((r) => r.proj !== null);
 
   return (
     <ChartShell>
@@ -131,20 +242,15 @@ function ChartView({
       <div className="h-64 w-full px-2 pb-4 pt-6 sm:h-72 sm:px-4">
         <ResponsiveContainer width="100%" height="100%" minWidth={0}>
           <AreaChart
-            data={data}
+            data={chartData}
             margin={{ top: 8, right: 16, bottom: 0, left: 0 }}
           >
             <defs>
-              {/* Richer fill on dark canvas: higher top alpha so the curve
-                  reads as a luminous canyon under the line. Three stops
-                  for non-linear falloff (premium gradient). */}
               <linearGradient id="safeGradient" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={safeColor} stopOpacity={0.55} />
                 <stop offset="55%" stopColor={safeColor} stopOpacity={0.18} />
                 <stop offset="100%" stopColor={safeColor} stopOpacity={0} />
               </linearGradient>
-              {/* Halo behind the stroke — stronger blur on dark for a
-                  visible "neon" feel like a banking app graph. */}
               <filter id="safeStrokeGlow" x="-20%" y="-20%" width="140%" height="140%">
                 <feGaussianBlur stdDeviation="3" result="blur" />
                 <feMerge>
@@ -178,6 +284,7 @@ function ChartView({
               content={<TooltipCard />}
             />
 
+            {/* Actual historical series */}
             <Area
               type="monotone"
               dataKey="safe"
@@ -186,27 +293,44 @@ function ChartView({
               fill="url(#safeGradient)"
               filter="url(#safeStrokeGlow)"
               dot={false}
-              activeDot={{
-                r: 5,
-                fill: safeColor,
-                strokeWidth: 2,
-                stroke: "#0f172a",
-              }}
+              activeDot={{ r: 5, fill: safeColor, strokeWidth: 2, stroke: "#0f172a" }}
+              connectNulls={false}
               animationDuration={1400}
               animationEasing="ease-out"
               isAnimationActive
             />
+
+            {/* Projection series — dashed, no fill, visually secondary */}
+            {hasProjection && (
+              <Area
+                type="monotone"
+                dataKey="proj"
+                stroke="#64748b"
+                strokeWidth={2}
+                strokeDasharray="6 4"
+                fill="none"
+                dot={false}
+                activeDot={{ r: 4, fill: "#64748b", strokeWidth: 1, stroke: "#0f172a" }}
+                connectNulls={false}
+                animationDuration={1400}
+                animationEasing="ease-out"
+                isAnimationActive
+              />
+            )}
           </AreaChart>
         </ResponsiveContainer>
       </div>
+
+      {hasProjection && (
+        <p className="px-6 pb-5 text-center text-[11px] text-slate-600 sm:px-8">
+          Cette projection est une estimation si ton activité reste stable.
+        </p>
+      )}
     </ChartShell>
   );
 }
 
 function ChartShell({ children }: { children: React.ReactNode }) {
-  // Translucent slate panel + ring-white/10 + backdrop-blur ⇒ glassmorphism
-  // on the dark page bg. The page's emerald spotlight bleeds through the
-  // blur to give the chart a subtle living tint.
   return (
     <div className="card-soft card-interactive relative overflow-hidden rounded-2xl bg-slate-900/50 ring-1 ring-white/10 backdrop-blur-xl">
       {children}
@@ -228,7 +352,7 @@ function ChartSkeleton() {
   );
 }
 
-type TooltipPayloadEntry = { dataKey: string; value: number };
+type TooltipPayloadEntry = { dataKey: string; value: number | null };
 type TooltipProps = {
   active?: boolean;
   payload?: TooltipPayloadEntry[];
@@ -237,16 +361,32 @@ type TooltipProps = {
 
 function TooltipCard({ active, payload, label }: TooltipProps) {
   if (!active || !payload || payload.length === 0) return null;
-  const safeEntry = payload.find((p) => p.dataKey === "safe");
-  if (safeEntry === undefined) return null;
+
+  const safeEntry = payload.find((p) => p.dataKey === "safe" && p.value !== null);
+  const projEntry = payload.find((p) => p.dataKey === "proj" && p.value !== null);
+
+  if (!safeEntry && !projEntry) return null;
+
   return (
-    <div className="rounded-xl bg-slate-950/90 px-3 py-2 text-xs shadow-2xl ring-1 ring-white/10 backdrop-blur">
+    <div className="rounded-xl bg-slate-950/90 px-3 py-2.5 text-xs shadow-2xl ring-1 ring-white/10 backdrop-blur">
       <p className="text-[11px] uppercase tracking-wider text-slate-500">
         {label ? formatDateTooltip(label) : ""}
       </p>
-      <p className="mt-1 font-mono text-sm font-semibold tabular-nums text-slate-100">
-        {formatEuro(safeEntry.value)}
-      </p>
+      {safeEntry && (
+        <p className="mt-1 font-mono text-sm font-semibold tabular-nums text-slate-100">
+          {formatEuro(safeEntry.value ?? 0)}
+        </p>
+      )}
+      {projEntry && !safeEntry && (
+        <>
+          <p className="mt-1 font-mono text-sm font-semibold tabular-nums text-slate-400">
+            ~{formatEuro(projEntry.value ?? 0)}
+          </p>
+          <p className="mt-0.5 text-[10px] text-slate-600">
+            Projection — estimation
+          </p>
+        </>
+      )}
     </div>
   );
 }
