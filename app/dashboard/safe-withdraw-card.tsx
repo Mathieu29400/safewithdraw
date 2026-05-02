@@ -3,17 +3,29 @@
 /**
  * SafeWithdrawCard — the dashboard's premium fintech KPI section.
  *
- * Layout (top to bottom):
- *   1. HeroCard — a Revolut-style dark card whose ONLY job is to display the
- *      "Montant retirable" label and the large balance number. No breakdown,
- *      no formula, no clutter — pure focal point.
- *   2. OverdrawAlert — only when `safe < 0`.
- *   3. BreakdownGrid — 4 (or 5 in advanced mode) floating glass tiles
- *      showing the components of the math: CA, URSSAF, Réserve, Retraits,
- *      and optionally Dépenses pro. Two columns on mobile, four (or five)
- *      on large screens. No hard borders — translucent slate over the
- *      dark page bg + 1 px white inner highlight on the top edge for the
- *      "premium card" feel.
+ * The card has TWO display modes, driven by the `mode` prop. Both modes
+ * render a hero number; what differs is the LABEL and the framing:
+ *
+ * - "period"   → live or archived URSSAF period.
+ *                Hero label: "Montant retirable" (it's actionable money).
+ *                The OverdrawAlert can fire only here AND only when the
+ *                parent flags `isCurrentPeriod` — archived periods are
+ *                read-only history, telling the user to stop withdrawing
+ *                from a past period would make no sense.
+ *
+ * - "all-time" → informational global view ("Depuis le début").
+ *                Hero label: "Bilan global estimé" — deliberately
+ *                different so users do NOT confuse this number with the
+ *                amount they can withdraw right now. A small helper line
+ *                under the hero spells the warning out in French.
+ *
+ * Layout (both modes):
+ *   1. HeroCard — same Revolut-style dark card, just with mode-aware
+ *      label and helper text.
+ *   2. OverdrawAlert — only in "period" mode AND when the period is
+ *      flagged as current.
+ *   3. BreakdownGrid — 4 (or 5 in advanced mode) floating glass tiles.
+ *      Tile labels switch to "totals" wording in all-time mode.
  *
  * Color system (global rule):
  *   - Positive amounts (CA, safe) ............ emerald-400
@@ -32,6 +44,8 @@ import { useSafeWithdraw, type PeriodRange } from "@/lib/use-safe-withdraw";
 /** 700 ms — matches AnimatedCurrency default and the spec window 500–800 ms. */
 const HERO_ANIM_DURATION_MS = 700;
 
+export type SafeWithdrawMode = "period" | "all-time";
+
 type Props = {
   userId: string | null;
   /**
@@ -41,23 +55,45 @@ type Props = {
    */
   advancedMode?: boolean;
   /**
-   * Start of the current URSSAF period (ISO timestamp from `periods.start_date`).
-   * - `undefined` → period not yet resolved; hold the hook in skeleton mode
-   *   to prevent flashing all-time data before the period is known.
-   * - `string` → filter transactions to `created_at >= periodStart`.
+   * "period"   → hero + period-scoped breakdown (current OR archived periods).
+   * "all-time" → "Bilan global estimé" hero + cumulative totals breakdown.
    */
-  periodStart?: string;
+  mode: SafeWithdrawMode;
+  /**
+   * Period range to scope the KPI by. Required when `mode === "period"`:
+   *   - `undefined` → period not yet resolved; hold the hook in skeleton mode
+   *     to prevent flashing stale data before the period is known.
+   *   - `PeriodRange` → filter transactions to
+   *     `created_at >= period.start` and (optionally) `< period.end`.
+   * Ignored when `mode === "all-time"` — the card always uses every transaction.
+   */
+  period?: PeriodRange;
+  /**
+   * Only meaningful when `mode === "period"`. When `true`, the period being
+   * displayed is the live current one and the OverdrawAlert is allowed to
+   * surface. When `false` (archived period view), the alert is suppressed
+   * so the user isn't told to stop withdrawing from a closed period.
+   * Defaults to `true` for backwards-compat with simple callers.
+   */
+  isCurrentPeriod?: boolean;
 };
 
-export function SafeWithdrawCard({ userId, advancedMode, periodStart }: Props) {
-  // When `periodStart` is undefined the period hasn't been fetched yet —
-  // pass null as userId to keep the hook in its loading state and avoid
-  // briefly showing stale all-time figures before the period resolves.
-  const effectiveUserId = periodStart !== undefined ? userId : null;
-  const period: PeriodRange | undefined = periodStart
-    ? { start: periodStart }
-    : undefined;
-  const state = useSafeWithdraw(effectiveUserId, period, { advancedMode });
+export function SafeWithdrawCard({
+  userId,
+  advancedMode,
+  mode,
+  period,
+  isCurrentPeriod = true,
+}: Props) {
+  // In "period" mode, hold the hook in loading until the period resolves so
+  // we never flash all-time data inside the period KPI. In "all-time" mode
+  // we intentionally pass NO period — the hook then sums every transaction.
+  const isPeriod = mode === "period";
+  const effectiveUserId = isPeriod && period === undefined ? null : userId;
+  const effectivePeriod = isPeriod ? period : undefined;
+  const state = useSafeWithdraw(effectiveUserId, effectivePeriod, {
+    advancedMode,
+  });
 
   if (state.status === "loading" || state.status === "no-urssaf-profile") {
     return <SkeletonSection showExpensesSlot={advancedMode === true} />;
@@ -77,9 +113,9 @@ export function SafeWithdrawCard({ userId, advancedMode, periodStart }: Props) {
 
   return (
     <section className="space-y-6">
-      <HeroCard data={data} isOverdrawn={isOverdrawn} />
-      {isOverdrawn && <OverdrawAlert />}
-      <BreakdownGrid data={data} showExpenses={showExpenses} />
+      <HeroCard data={data} isOverdrawn={isOverdrawn} mode={mode} />
+      {isPeriod && isCurrentPeriod && isOverdrawn && <OverdrawAlert />}
+      <BreakdownGrid data={data} showExpenses={showExpenses} mode={mode} />
     </section>
   );
 }
@@ -91,9 +127,11 @@ export function SafeWithdrawCard({ userId, advancedMode, periodStart }: Props) {
 function HeroCard({
   data,
   isOverdrawn,
+  mode,
 }: {
   data: CashflowResult;
   isOverdrawn: boolean;
+  mode: SafeWithdrawMode;
 }) {
   const ambientGlow = isOverdrawn
     ? "bg-[radial-gradient(ellipse_70%_60%_at_50%_50%,rgba(244,63,94,0.30),transparent_70%)]"
@@ -112,6 +150,13 @@ function HeroCard({
     : "bg-gradient-to-r from-transparent via-emerald-400/50 to-transparent";
 
   const labelTone = isOverdrawn ? "text-rose-400/80" : "text-emerald-400/80";
+
+  // Spec rule: never call the all-time number "Montant retirable" — that
+  // would mislead users into thinking they can withdraw the global
+  // historical balance. Use a deliberately different label and a helper
+  // line that explicitly disclaims the actionable interpretation.
+  const heroLabel =
+    mode === "all-time" ? "Bilan global estimé" : "Montant retirable";
 
   return (
     <div className="relative isolate">
@@ -135,7 +180,7 @@ function HeroCard({
         <p
           className={`text-[11px] font-medium uppercase tracking-[0.18em] transition-colors duration-700 ${labelTone}`}
         >
-          Montant retirable
+          {heroLabel}
         </p>
 
         <div className="relative mt-6">
@@ -157,6 +202,13 @@ function HeroCard({
             className="text-6xl font-semibold tracking-tight drop-shadow-[0_4px_16px_rgba(0,0,0,0.4)] sm:text-8xl lg:text-9xl"
           />
         </div>
+
+        {mode === "all-time" && (
+          <p className="relative mt-5 max-w-xl text-sm leading-relaxed text-slate-400">
+            Cette vue est informative et ne correspond pas au montant
+            retirable de la période actuelle.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -195,25 +247,43 @@ function OverdrawAlert() {
 function BreakdownGrid({
   data,
   showExpenses,
+  mode,
 }: {
   data: CashflowResult;
   showExpenses: boolean;
+  mode: SafeWithdrawMode;
 }) {
+  // All-time labels emphasise that the figures are cumulative; period
+  // labels stay terse so the hero stays the headline. Same numbers, just
+  // a clearer framing per-mode.
+  const labels =
+    mode === "all-time"
+      ? {
+          ca: "CA total",
+          urssaf: "URSSAF estimée totale",
+          reserve: "Réserve totale",
+          withdrawals: "Retraits totaux",
+          expenses: "Dépenses totales",
+        }
+      : {
+          ca: "Chiffre d’affaires",
+          urssaf: "URSSAF estimée",
+          reserve: "Réserve de sécurité",
+          withdrawals: "Déjà retiré",
+          expenses: "Dépenses pro",
+        };
+
   return (
     <div className="space-y-3 sm:space-y-4">
       <div className="grid grid-cols-3 gap-3 sm:gap-4">
+        <BreakdownTile label={labels.ca} amount={data.ca} tone="positive" />
         <BreakdownTile
-          label="Chiffre d’affaires"
-          amount={data.ca}
-          tone="positive"
-        />
-        <BreakdownTile
-          label="URSSAF estimée"
+          label={labels.urssaf}
           amount={data.urssafDue}
           tone="negative"
         />
         <BreakdownTile
-          label="Réserve de sécurité"
+          label={labels.reserve}
           amount={data.reserve}
           tone="negative"
           hint="10 %"
@@ -223,13 +293,13 @@ function BreakdownGrid({
         className={`grid gap-3 sm:gap-4 ${showExpenses ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-2"}`}
       >
         <BreakdownTile
-          label="Déjà retiré"
+          label={labels.withdrawals}
           amount={data.withdrawals}
           tone="negative"
         />
         {showExpenses && (
           <BreakdownTile
-            label="Dépenses pro"
+            label={labels.expenses}
             amount={data.expenses}
             tone="negative"
           />

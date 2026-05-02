@@ -10,6 +10,13 @@ type Props = {
   userId: string;
   /** Called after a successful insert. Lets the parent refresh its list. */
   onCreated?: () => void;
+  /**
+   * Optional `YYYY-MM-DD` pre-fill for the date picker. The dashboard
+   * passes the LAST day of an archived period when one is being viewed,
+   * so a quick-add lands inside that period instead of leaking into
+   * today's live current period. When omitted, falls back to today.
+   */
+  defaultDate?: string;
 };
 
 /**
@@ -26,11 +33,12 @@ export function AddExpenseDialog({
   onOpenChange,
   userId,
   onCreated,
+  defaultDate,
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
-  const [date, setDate] = useState<string>(todayLocalIso);
+  const [date, setDate] = useState<string>(() => defaultDate ?? todayLocalIso());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

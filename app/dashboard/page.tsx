@@ -1,11 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { supabase } from "@/lib/supabase";
 import type { Expense, PeriodType, Transaction } from "@/lib/database.types";
+import type { PeriodRange } from "@/lib/use-safe-withdraw";
 import { useCurrentPeriod } from "@/lib/use-current-period";
+import {
+  type PreviousPeriodSummary,
+  usePreviousPeriods,
+} from "@/lib/use-previous-periods";
 
 import { AddExpenseDialog } from "./add-expense-dialog";
 import {
@@ -25,6 +30,52 @@ type HistoryExpense = Pick<
   "id" | "amount" | "description" | "created_at"
 >;
 
+/**
+ * Navigation is split into TWO independent pieces of state, on purpose.
+ * The spec calls for "Depuis le début" to live OUTSIDE the URSSAF period
+ * dropdown, and toggling between the two surfaces should not destroy the
+ * user's last period choice.
+ *
+ *   - `selectedPeriod` — what the URSSAF dropdown is pointing at. Either
+ *     "current" (the live period) or one specific archived period. Always
+ *     defined; carries the boundary data we need to filter the dashboard.
+ *
+ *   - `view` — which surface is being shown right now: "period" (the
+ *     selected URSSAF period) or "all-time" ("Depuis le début"). Toggling
+ *     to "all-time" preserves `selectedPeriod` so that a single click on
+ *     the dropdown puts the user back exactly where they were.
+ *
+ * Editability is derived: only the LIVE current period is editable.
+ * Archived periods and the all-time view are strictly read-only.
+ */
+type SelectedPeriod =
+  | { kind: "current" }
+  | {
+      kind: "archived";
+      periodId: string;
+      startDate: string;
+      endDate: string;
+      type: PeriodType;
+    };
+
+const SELECTED_CURRENT: SelectedPeriod = { kind: "current" };
+
+/**
+ * Inline style applied to every `<option>` of the period dropdown.
+ *
+ * Native <option>s are painted by the OS, so Tailwind classes are
+ * ignored — without explicit colours, Windows + Chromium browsers
+ * draw the popup with the OS default (white on white in light theme),
+ * which made the list appear blank until each row was hovered. The OS
+ * picker DOES honour inline `background` / `color`, so we hardcode
+ * slate-950 + slate-200 to match the rest of the dashboard's dark
+ * canvas.
+ */
+const DROPDOWN_OPTION_STYLE: React.CSSProperties = {
+  background: "#0f172a",
+  color: "#e2e8f0",
+};
+
 export default function DashboardPage() {
   const router = useRouter();
   const [email, setEmail] = useState<string | null>(null);
@@ -40,30 +91,93 @@ export default function DashboardPage() {
   const [expenseDialogOpen, setExpenseDialogOpen] = useState(false);
   const [newPeriodDialogOpen, setNewPeriodDialogOpen] = useState(false);
 
+  // Two-piece nav state — see `SelectedPeriod` doc above. Default is the
+  // live current period in period-view: that's the user's actionable home
+  // base on every load.
+  const [selectedPeriod, setSelectedPeriod] =
+    useState<SelectedPeriod>(SELECTED_CURRENT);
+  const [view, setView] = useState<"period" | "all-time">("period");
+
   // Declaration frequency from urssaf_profile — needed when inserting new periods.
   const [declarationFrequency, setDeclarationFrequency] =
     useState<PeriodType>("monthly");
 
   // Current URSSAF period: the most recent row in `periods` for this user.
   // `undefined` while loading so SafeWithdrawCard stays in skeleton mode and
-  // we never flash all-time data before the period is known.
+  // we never flash all-time data before the period is known. We pull the
+  // period's `type` too so the dropdown label can render frequency-aware
+  // ("mai 2026" vs "T2 2026").
   const currentPeriodState = useCurrentPeriod(userId);
-  // `undefined` while loading (holds SafeWithdrawCard in skeleton mode);
-  // a string once the period is resolved (auto-created if none existed).
   const periodStart =
     currentPeriodState.status === "ready"
       ? currentPeriodState.periodStart
       : undefined;
+  const currentPeriodType: PeriodType =
+    currentPeriodState.status === "ready"
+      ? currentPeriodState.periodType
+      : declarationFrequency;
+
+  // Archived periods (everything older than the latest one). Drives both
+  // the secondary "Anciennes périodes URSSAF" section AND the period
+  // dropdown's archive entries. Same realtime triggers as the live KPI
+  // so it updates immediately after a "Nouvelle période".
+  const previousPeriodsState = usePreviousPeriods(userId, {
+    advancedMode: advancedMode ?? undefined,
+  });
+  const archivedPeriods =
+    previousPeriodsState.status === "ready"
+      ? previousPeriodsState.periods
+      : [];
+
+  // Resolve the navigation state into the props the Card / Chart / lists
+  // actually need. We do this in ONE place so a wrong combination (e.g.
+  // "all-time" + a stray period range) is impossible to express downstream.
+  //
+  // `isCurrentPeriod` is what gates the OverdrawAlert: an "évite tout
+  // nouveau retrait" warning would be misleading on an archived period
+  // (closed) or in the all-time view (informational).
+  const isCurrentPeriod =
+    view === "period" && selectedPeriod.kind === "current";
+  const cardMode: "period" | "all-time" = view;
+  const cardPeriod: PeriodRange | undefined = useMemo(() => {
+    if (view === "all-time") return undefined;
+    if (selectedPeriod.kind === "current") {
+      return periodStart ? { start: periodStart } : undefined;
+    }
+    return { start: selectedPeriod.startDate, end: selectedPeriod.endDate };
+  }, [view, selectedPeriod, periodStart]);
+
+  const chartEmptyVariant: "current-period" | "all-time" =
+    view === "all-time" ? "all-time" : "current-period";
+
+  // Default date the Add dialogs should pre-fill. When the user is
+  // browsing an ARCHIVED period, we want a quick-add to land inside
+  // that period — otherwise the row would slip into today's live
+  // current period instead. We pick the LAST day of the archive (one
+  // millisecond before its exclusive end), formatted as `YYYY-MM-DD`.
+  // For the live current period or the all-time view, we leave it
+  // undefined so the dialog falls back to today.
+  const dialogDefaultDate = useMemo<string | undefined>(() => {
+    if (view !== "period" || selectedPeriod.kind !== "archived") {
+      return undefined;
+    }
+    const lastDay = new Date(new Date(selectedPeriod.endDate).getTime() - 1);
+    const yyyy = lastDay.getUTCFullYear();
+    const mm = String(lastDay.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(lastDay.getUTCDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }, [view, selectedPeriod]);
 
   const [history, setHistory] = useState<HistoryTransaction[] | null>(null);
   const [expenses, setExpenses] = useState<HistoryExpense[] | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [expensesTick, setExpensesTick] = useState(0);
 
-  // SafeWithdraw is computed against the user's full transaction history —
-  // no period scoping on the dashboard. Multi-period views live in the
-  // future /analytics section, which can opt into the period-aware mode
-  // of `useSafeWithdraw(userId, period)`.
+  // SafeWithdraw is computed period-scoped or all-time depending on the
+  // dropdown selection above ("Période actuelle" / "Depuis le début" /
+  // an archived period). All three modes share the same hook
+  // (`useSafeWithdraw`) — the only difference is which `period` (if any)
+  // we pass. See `cardPeriod` derivation above.
 
   useEffect(() => {
     let cancelled = false;
@@ -164,6 +278,99 @@ export default function DashboardPage() {
     setExpensesTick((t) => t + 1);
   }, []);
 
+  // Row-level delete handlers. The realtime subscriptions on
+  // `transactions` / `expenses` take it from there: every KPI, the
+  // chart, and the bucketed archive recompute as soon as the row
+  // disappears. We don't optimistically patch local state — letting
+  // the realtime payload drive the refetch keeps a single source of
+  // truth and avoids drift between tabs.
+  const handleDeleteTransaction = useCallback(
+    async (id: string) => {
+      if (!userId) return;
+      await supabase.from("transactions").delete().eq("id", id);
+    },
+    [userId],
+  );
+
+  const handleDeleteExpense = useCallback(
+    async (id: string) => {
+      if (!userId) return;
+      await supabase.from("expenses").delete().eq("id", id);
+    },
+    [userId],
+  );
+
+  // "Nouvelle période URSSAF" handler. AWAITED so the dialog can show
+  // a loading state and surface RLS / network errors to the user
+  // instead of silently swallowing them (which previously made the
+  // button feel like a no-op when something failed).
+  //
+  // Throws on error so the dialog's catch branch can render the
+  // message inline.
+  const handleNewPeriod = useCallback(async () => {
+    if (!userId) {
+      throw new Error("Utilisateur non connecté");
+    }
+    if (!periodStart) {
+      throw new Error("Période actuelle non encore chargée");
+    }
+    const newStartDate = nextPeriodStartFromLatest(
+      periodStart,
+      declarationFrequency,
+    );
+    const { error } = await supabase.from("periods").insert({
+      user_id: userId,
+      type: declarationFrequency,
+      start_date: newStartDate,
+      current_ca: 0,
+    });
+    if (error) {
+      throw new Error(error.message);
+    }
+    // Snap BOTH nav pieces back to the (new) live current period. The
+    // realtime subscription on `periods` re-resolves `periodStart` to
+    // the freshly inserted row, and every period-scoped hook
+    // recomputes against the new boundary.
+    setSelectedPeriod(SELECTED_CURRENT);
+    setView("period");
+  }, [userId, periodStart, declarationFrequency]);
+
+  // Lists scoped to the active view. We always fetch the user's full
+  // history (so realtime / backfill work uniformly) and slice it here:
+  //
+  //   - "period" view → keep rows where created_at ∈ [start, end)
+  //   - "all-time"    → keep everything
+  //
+  // Returning the original array reference when no filtering is needed
+  // keeps memo identity stable for downstream components.
+  const filteredHistory = useMemo<HistoryTransaction[] | null>(() => {
+    if (history === null) return null;
+    if (view === "all-time") return history;
+    if (!cardPeriod) return null; // period not resolved yet
+    const startMs = new Date(cardPeriod.start).getTime();
+    const endMs = cardPeriod.end
+      ? new Date(cardPeriod.end).getTime()
+      : Number.POSITIVE_INFINITY;
+    return history.filter((t) => {
+      const ts = new Date(t.created_at).getTime();
+      return ts >= startMs && ts < endMs;
+    });
+  }, [history, view, cardPeriod]);
+
+  const filteredExpenses = useMemo<HistoryExpense[] | null>(() => {
+    if (expenses === null) return null;
+    if (view === "all-time") return expenses;
+    if (!cardPeriod) return null;
+    const startMs = new Date(cardPeriod.start).getTime();
+    const endMs = cardPeriod.end
+      ? new Date(cardPeriod.end).getTime()
+      : Number.POSITIVE_INFINITY;
+    return expenses.filter((e) => {
+      const ts = new Date(e.created_at).getTime();
+      return ts >= startMs && ts < endMs;
+    });
+  }, [expenses, view, cardPeriod]);
+
   // Keep the history live across tabs / devices: any insert/update/delete
   // on this user's transactions bumps the tick and triggers a refetch.
   useEffect(() => {
@@ -256,15 +463,32 @@ export default function DashboardPage() {
       </header>
 
       <main className="mx-auto w-full max-w-5xl flex-1 space-y-14 px-4 py-12 sm:space-y-20 sm:px-6 sm:py-16">
+        <PeriodNav
+          view={view}
+          selectedPeriod={selectedPeriod}
+          onSelectPeriod={(next) => {
+            setSelectedPeriod(next);
+            setView("period");
+          }}
+          onShowAllTime={() => setView("all-time")}
+          currentPeriodStart={periodStart}
+          currentPeriodType={currentPeriodType}
+          archivedPeriods={archivedPeriods}
+        />
+
         <SafeWithdrawCard
           userId={userId}
           advancedMode={advancedMode ?? undefined}
-          periodStart={periodStart}
+          mode={cardMode}
+          period={cardPeriod}
+          isCurrentPeriod={isCurrentPeriod}
         />
 
         <CashflowChart
           userId={userId}
           advancedMode={advancedMode ?? undefined}
+          period={cardMode === "period" ? cardPeriod : undefined}
+          emptyVariant={chartEmptyVariant}
         />
 
         <section className="space-y-5">
@@ -273,6 +497,12 @@ export default function DashboardPage() {
               Transactions
             </h2>
 
+            {/* Action buttons are always visible regardless of the active
+                view. Each entry lands in whichever period its `created_at`
+                falls into (the dialogs default the date to today, so a
+                quick add lands in the live current period). The "Nouvelle
+                période URSSAF" button always advances to the next month
+                and snaps the dashboard back to the new live period. */}
             <div className="flex flex-shrink-0 flex-col gap-2 sm:flex-row sm:gap-3">
               <button
                 type="button"
@@ -318,7 +548,10 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <HistoryCard transactions={history} />
+          <HistoryCard
+            transactions={filteredHistory}
+            onDelete={handleDeleteTransaction}
+          />
         </section>
 
         {/* Mode avancé — toggle paired with the feature it controls. The
@@ -346,9 +579,17 @@ export default function DashboardPage() {
                 + Dépense
               </button>
             </div>
-            <ExpensesCard expenses={expenses} />
+            <ExpensesCard
+              expenses={filteredExpenses}
+              onDelete={handleDeleteExpense}
+            />
           </section>
         )}
+
+        {/* Compact archive of every closed URSSAF period. Sits at the
+            bottom of the dashboard because it's secondary context — the
+            user's day-to-day decisions live in the hero/breakdown above. */}
+        <PreviousPeriodsSection state={previousPeriodsState} />
       </main>
 
       {userId && dialogType && (
@@ -360,6 +601,7 @@ export default function DashboardPage() {
           }}
           userId={userId}
           onCreated={refreshHistory}
+          defaultDate={dialogDefaultDate}
         />
       )}
 
@@ -369,6 +611,7 @@ export default function DashboardPage() {
           onOpenChange={setExpenseDialogOpen}
           userId={userId}
           onCreated={refreshExpenses}
+          defaultDate={dialogDefaultDate}
         />
       )}
 
@@ -376,29 +619,269 @@ export default function DashboardPage() {
         <NewPeriodDialog
           open={newPeriodDialogOpen}
           onOpenChange={setNewPeriodDialogOpen}
-          onConfirm={() => {
-            // Insert a new period with `start_date = exact moment of click`.
-            // Sub-day timestamp is INTENTIONAL: every transaction logged
-            // earlier today belongs to the previous period and must be
-            // excluded from the fresh KPI. The `useCurrentPeriod` realtime
-            // subscription picks up the INSERT and re-scopes the dashboard.
-            // Historical data (transactions, withdrawals, previous periods)
-            // is never deleted — only the KPI's lower bound moves.
-            const newStartDate = new Date().toISOString();
-            // [TEMP DIAG] confirm before/after period boundaries when resetting.
-            console.log("[reset] previous periodStart →", periodStart);
-            console.log("[reset] new periodStart →", newStartDate);
-            void supabase.from("periods").insert({
-              user_id: userId,
-              type: declarationFrequency,
-              start_date: newStartDate,
-              current_ca: 0,
-            });
-          }}
+          onConfirm={handleNewPeriod}
         />
       )}
     </div>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* PeriodNav — split navigation: URSSAF dropdown + "Depuis le début" toggle    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Two side-by-side controls, per spec:
+ *
+ *     [ Période actuelle (mai 2026) ▾ ]   [ Depuis le début ]
+ *
+ * The dropdown is reserved for URSSAF periods (current + archived). The
+ * "Depuis le début" tab is a separate, mutually-exclusive view. Whichever
+ * surface is active gets the emerald ring; the other is muted. Picking
+ * any option in the dropdown automatically returns the dashboard to the
+ * "period" view (no extra click needed).
+ */
+function PeriodNav({
+  view,
+  selectedPeriod,
+  onSelectPeriod,
+  onShowAllTime,
+  currentPeriodStart,
+  currentPeriodType,
+  archivedPeriods,
+}: {
+  view: "period" | "all-time";
+  selectedPeriod: SelectedPeriod;
+  onSelectPeriod: (next: SelectedPeriod) => void;
+  onShowAllTime: () => void;
+  currentPeriodStart: string | undefined;
+  currentPeriodType: PeriodType;
+  archivedPeriods: PreviousPeriodSummary[];
+}) {
+  const value =
+    selectedPeriod.kind === "current"
+      ? "current"
+      : `old:${selectedPeriod.periodId}`;
+
+  // Live current period has no explicit end. For monthly users the inline
+  // label is just the month ("mai 2026"). For quarterly users we project
+  // a 3-month rolling span ("mai → juil. 2026") to match the spec.
+  const currentInline = currentPeriodStart
+    ? periodLabel(
+        currentPeriodStart,
+        undefined,
+        currentPeriodType,
+        "inline",
+      )
+    : null;
+  const currentLabel = currentInline
+    ? `Période actuelle (${currentInline})`
+    : "Période actuelle";
+
+  const handleSelect = (raw: string) => {
+    if (raw === "current") {
+      onSelectPeriod(SELECTED_CURRENT);
+      return;
+    }
+    if (raw.startsWith("old:")) {
+      const id = raw.slice("old:".length);
+      const archived = archivedPeriods.find((p) => p.id === id);
+      if (!archived) return;
+      onSelectPeriod({
+        kind: "archived",
+        periodId: archived.id,
+        startDate: archived.startDate,
+        endDate: archived.endDate,
+        type: archived.type,
+      });
+    }
+  };
+
+  const periodActive = view === "period";
+  const allTimeActive = view === "all-time";
+
+  // Active surface gets an emerald ring + slightly brighter background;
+  // the inactive one stays muted. Same visual grammar both sides so the
+  // pair reads as one segmented nav.
+  const activeRing =
+    "bg-slate-900/80 ring-emerald-500/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]";
+  const idleRing = "bg-slate-900/50 ring-white/10 hover:bg-slate-900/70";
+
+  return (
+    <div className="space-y-2">
+      <span className="block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
+        Affichage
+      </span>
+      <div className="flex flex-wrap items-stretch gap-2">
+        {/* Period dropdown — URSSAF periods only */}
+        <div
+          className={`relative w-full max-w-xs rounded-xl ring-1 backdrop-blur transition ${
+            periodActive ? activeRing : idleRing
+          }`}
+        >
+          <label htmlFor="period-select" className="sr-only">
+            Sélection de la période URSSAF
+          </label>
+          <select
+            id="period-select"
+            value={value}
+            onChange={(e) => handleSelect(e.target.value)}
+            className={`w-full appearance-none bg-transparent py-2.5 pl-4 pr-10 text-sm font-medium focus:outline-none [color-scheme:dark] ${
+              periodActive ? "text-slate-100" : "text-slate-400"
+            }`}
+          >
+            {/* Native <option> elements are rendered by the OS, so Tailwind
+                classes don't apply. On Windows + Chrome/Edge the panel
+                paints white-on-white until a row is hovered. We force
+                a slate panel + light text via inline styles, which the
+                OS picker DOES honour. */}
+            <option style={DROPDOWN_OPTION_STYLE} value="current">
+              {currentLabel}
+            </option>
+            {archivedPeriods.map((p) => (
+              <option
+                style={DROPDOWN_OPTION_STYLE}
+                key={p.id}
+                value={`old:${p.id}`}
+              >
+                {periodLabel(p.startDate, p.endDate, p.type, "standalone")}
+              </option>
+            ))}
+          </select>
+          <span
+            aria-hidden
+            className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </span>
+        </div>
+
+        {/* Depuis le début — separate toggle, never inside the dropdown */}
+        <button
+          type="button"
+          onClick={onShowAllTime}
+          aria-pressed={allTimeActive}
+          className={`inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-sm font-medium ring-1 transition focus:outline-none focus:ring-2 focus:ring-emerald-500/30 ${
+            allTimeActive
+              ? `${activeRing} text-slate-100`
+              : `${idleRing} text-slate-400 hover:text-slate-200`
+          }`}
+        >
+          Depuis le début
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Period label — the single source of truth for "how do we name a period
+ * in the URSSAF dropdown?" Used for both the current period (inline,
+ * inside `Période actuelle (…)` parentheses) and archived periods
+ * (standalone, capitalised).
+ *
+ * Formatting rules (per spec):
+ *
+ *   single calendar month         → "mai 2026"
+ *   multi-month inside same year  → "mai → juil. 2026"
+ *   multi-month across years      → "nov. 2025 → janv. 2026"
+ *
+ * The `type` arg only matters for the LIVE current period (no `end`):
+ *   - monthly   → label is just the start month
+ *   - quarterly → label projects 3 months from the start (the rolling
+ *                 quarter the user asked for: "April → mai-juin-juillet")
+ *
+ * For archived periods we always use the actual span [start, end-1day],
+ * which means a quarterly period that the user closed early shows the
+ * months it really covered — never a misleading projected range.
+ */
+type PeriodLabelKind = "inline" | "standalone";
+
+function periodLabel(
+  start: string,
+  end: string | undefined,
+  type: PeriodType,
+  kind: PeriodLabelKind,
+): string {
+  const startDate = new Date(start);
+  const startMonth = startDate.getUTCMonth();
+  const startYear = startDate.getUTCFullYear();
+
+  let endMonth: number;
+  let endYear: number;
+  if (end !== undefined) {
+    // `end` is exclusive — show the LAST calendar month included.
+    const lastIncluded = new Date(new Date(end).getTime() - 1);
+    endMonth = lastIncluded.getUTCMonth();
+    endYear = lastIncluded.getUTCFullYear();
+  } else if (type === "quarterly") {
+    const projected = new Date(Date.UTC(startYear, startMonth + 2, 1));
+    endMonth = projected.getUTCMonth();
+    endYear = projected.getUTCFullYear();
+  } else {
+    endMonth = startMonth;
+    endYear = startYear;
+  }
+
+  const sameMonth = startMonth === endMonth && startYear === endYear;
+  const finalize = (s: string) =>
+    kind === "standalone" ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+
+  if (sameMonth) {
+    const monthName = utcMonthName(startYear, startMonth, "long");
+    return finalize(`${monthName} ${startYear}`);
+  }
+
+  const startName = utcMonthName(startYear, startMonth, "short");
+  const endName = utcMonthName(endYear, endMonth, "short");
+  if (startYear !== endYear) {
+    return finalize(`${startName} ${startYear} → ${endName} ${endYear}`);
+  }
+  return finalize(`${startName} → ${endName} ${endYear}`);
+}
+
+function utcMonthName(
+  year: number,
+  monthZeroBased: number,
+  length: "long" | "short",
+): string {
+  return new Date(Date.UTC(year, monthZeroBased, 1)).toLocaleDateString(
+    "fr-FR",
+    { month: length, timeZone: "UTC" },
+  );
+}
+
+/**
+ * Computes the start_date for the period that comes AFTER `latestStart`.
+ *
+ *   - monthly   → latestStart's calendar month + 1, snapped to 1st of UTC month.
+ *   - quarterly → latestStart's calendar month + 3, snapped to 1st of UTC month.
+ *
+ * Anchored on the latest period's start, NOT on today, so repeated clicks
+ * keep advancing one step at a time (May → June → July → …) even when the
+ * calendar hasn't changed. Auto-rotation in `useCurrentPeriod` separately
+ * handles the case where the user simply opened the app in a new month.
+ */
+function nextPeriodStartFromLatest(
+  latestStartIso: string,
+  frequency: PeriodType,
+): string {
+  const d = new Date(latestStartIso);
+  const monthsToAdd = frequency === "quarterly" ? 3 : 1;
+  return new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + monthsToAdd, 1),
+  ).toISOString();
 }
 
 function AdvancedModeSection({
@@ -456,8 +939,10 @@ function AdvancedModeSection({
 
 function HistoryCard({
   transactions,
+  onDelete,
 }: {
   transactions: HistoryTransaction[] | null;
+  onDelete: (id: string) => void;
 }) {
   if (transactions === null) {
     return (
@@ -486,7 +971,7 @@ function HistoryCard({
         {transactions.map((t) => (
           <li
             key={t.id}
-            className="animate-row-in flex items-center justify-between px-6 py-4 transition-colors duration-150 hover:bg-white/[0.03]"
+            className="animate-row-in group flex items-center justify-between gap-3 px-6 py-4 transition-colors duration-150 hover:bg-white/[0.03]"
           >
             <div className="flex items-center gap-3">
               <span
@@ -502,16 +987,27 @@ function HistoryCard({
                 {formatDate(t.created_at)}
               </span>
             </div>
-            <span
-              className={`font-mono text-sm font-medium tabular-nums ${
-                t.type === "income" ? "text-emerald-400" : "text-rose-400"
-              }`}
-            >
-              <span className="mr-0.5 font-sans text-slate-500">
-                {t.type === "income" ? "+" : "−"}
+            <div className="flex flex-shrink-0 items-center gap-3">
+              <span
+                className={`font-mono text-sm font-medium tabular-nums ${
+                  t.type === "income" ? "text-emerald-400" : "text-rose-400"
+                }`}
+              >
+                <span className="mr-0.5 font-sans text-slate-500">
+                  {t.type === "income" ? "+" : "−"}
+                </span>
+                {formatEuro(t.amount)}
               </span>
-              {formatEuro(t.amount)}
-            </span>
+              <DeleteRowButton
+                onConfirm={() => onDelete(t.id)}
+                ariaLabel={`Supprimer ${t.type === "income" ? "l’entrée" : "le retrait"} de ${formatEuro(t.amount)}`}
+                confirmMessage={
+                  t.type === "income"
+                    ? "Supprimer cette entrée ?"
+                    : "Supprimer ce retrait ?"
+                }
+              />
+            </div>
           </li>
         ))}
       </ul>
@@ -519,7 +1015,13 @@ function HistoryCard({
   );
 }
 
-function ExpensesCard({ expenses }: { expenses: HistoryExpense[] | null }) {
+function ExpensesCard({
+  expenses,
+  onDelete,
+}: {
+  expenses: HistoryExpense[] | null;
+  onDelete: (id: string) => void;
+}) {
   if (expenses === null) {
     return (
       <div className="card-soft rounded-2xl bg-slate-900/50 p-6 text-sm text-slate-400 ring-1 ring-white/10 backdrop-blur-xl">
@@ -547,7 +1049,7 @@ function ExpensesCard({ expenses }: { expenses: HistoryExpense[] | null }) {
         {expenses.map((e) => (
           <li
             key={e.id}
-            className="animate-row-in flex items-center justify-between gap-3 px-6 py-4 transition-colors duration-150 hover:bg-white/[0.03]"
+            className="animate-row-in group flex items-center justify-between gap-3 px-6 py-4 transition-colors duration-150 hover:bg-white/[0.03]"
           >
             <div className="flex min-w-0 items-center gap-3">
               <span
@@ -561,15 +1063,296 @@ function ExpensesCard({ expenses }: { expenses: HistoryExpense[] | null }) {
                 {formatDate(e.created_at)}
               </span>
             </div>
-            <span className="font-mono text-sm font-medium tabular-nums text-rose-400">
-              <span className="mr-0.5 font-sans text-slate-500">−</span>
-              {formatEuro(e.amount)}
-            </span>
+            <div className="flex flex-shrink-0 items-center gap-3">
+              <span className="font-mono text-sm font-medium tabular-nums text-rose-400">
+                <span className="mr-0.5 font-sans text-slate-500">−</span>
+                {formatEuro(e.amount)}
+              </span>
+              <DeleteRowButton
+                onConfirm={() => onDelete(e.id)}
+                ariaLabel={`Supprimer la dépense de ${formatEuro(e.amount)}`}
+                confirmMessage="Supprimer cette dépense ?"
+              />
+            </div>
           </li>
         ))}
       </ul>
     </div>
   );
+}
+
+/**
+ * Small trash-icon button used inside each row of the transactions /
+ * expenses lists. Two-step interaction so a stray click never erases
+ * data: first click flips the button into a "Confirmer ?" pill, a
+ * second click within 4 seconds actually deletes. Anywhere-else click
+ * (or the timer) cancels.
+ *
+ * Deletion goes through `onConfirm`; the parent owns the supabase
+ * call and the realtime subscriptions take care of refreshing every
+ * KPI / chart / list automatically.
+ */
+function DeleteRowButton({
+  onConfirm,
+  ariaLabel,
+  confirmMessage,
+}: {
+  onConfirm: () => void;
+  ariaLabel: string;
+  confirmMessage: string;
+}) {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const t = window.setTimeout(() => setArmed(false), 4000);
+    return () => window.clearTimeout(t);
+  }, [armed]);
+
+  if (armed) {
+    return (
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => {
+            setArmed(false);
+            onConfirm();
+          }}
+          className="inline-flex items-center justify-center rounded-md bg-rose-500/15 px-2.5 py-1 text-[11px] font-medium text-rose-300 ring-1 ring-rose-500/30 transition hover:bg-rose-500/25 hover:text-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-500/40"
+        >
+          {confirmMessage}
+        </button>
+        <button
+          type="button"
+          onClick={() => setArmed(false)}
+          aria-label="Annuler la suppression"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition hover:bg-white/5 hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-white/20"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setArmed(true)}
+      aria-label={ariaLabel}
+      title="Supprimer"
+      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 opacity-0 transition hover:bg-rose-500/10 hover:text-rose-300 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-rose-500/30 group-hover:opacity-100"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <polyline points="3 6 5 6 21 6" />
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+        <path d="M10 11v6" />
+        <path d="M14 11v6" />
+        <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+      </svg>
+    </button>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Anciennes périodes URSSAF — secondary archive list                          */
+/* -------------------------------------------------------------------------- */
+
+function PreviousPeriodsSection({
+  state,
+}: {
+  state: ReturnType<typeof usePreviousPeriods>;
+}) {
+  // Hide this section entirely when the user has no URSSAF profile yet —
+  // the rest of the dashboard already nudges them to onboard. Showing an
+  // empty "anciennes périodes" rail in that state would just be noise.
+  if (state.status === "no-urssaf-profile") return null;
+
+  return (
+    <section className="space-y-5">
+      <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
+        Anciennes périodes URSSAF
+      </h2>
+      <PreviousPeriodsBody state={state} />
+    </section>
+  );
+}
+
+function PreviousPeriodsBody({
+  state,
+}: {
+  state: ReturnType<typeof usePreviousPeriods>;
+}) {
+  if (state.status === "loading") {
+    return (
+      <div className="card-soft rounded-2xl bg-slate-900/50 p-6 text-sm text-slate-400 ring-1 ring-white/10 backdrop-blur-xl">
+        Chargement des anciennes périodes…
+      </div>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <div className="rounded-2xl bg-rose-950/40 p-5 text-sm text-rose-300 ring-1 ring-rose-500/30 backdrop-blur">
+        Impossible de charger l’historique des périodes : {state.error}
+      </div>
+    );
+  }
+
+  // The parent (PreviousPeriodsSection) already returns null for the
+  // "no-urssaf-profile" branch, so we'd never render this component in
+  // that state. We still re-handle it here so TypeScript can narrow the
+  // discriminated union to "ready" and unlock `state.periods` access.
+  if (state.status === "no-urssaf-profile") return null;
+
+  if (state.periods.length === 0) {
+    return (
+      <div className="card-soft rounded-2xl bg-slate-900/50 p-6 text-center ring-1 ring-white/10 backdrop-blur-xl">
+        <p className="text-sm font-medium text-slate-200">
+          Aucune période archivée
+        </p>
+        <p className="mt-1.5 text-sm text-slate-500">
+          Vos anciennes périodes URSSAF apparaîtront ici dès que vous aurez
+          cliqué sur « Nouvelle période URSSAF ».
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <ul className="space-y-3">
+      {state.periods.map((p) => (
+        <PreviousPeriodRow key={p.id} period={p} />
+      ))}
+    </ul>
+  );
+}
+
+function PreviousPeriodRow({ period }: { period: PreviousPeriodSummary }) {
+  const { result } = period;
+  return (
+    <li className="card-soft card-interactive rounded-2xl bg-slate-900/50 p-4 ring-1 ring-white/10 backdrop-blur-xl sm:p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-slate-100">
+            {formatPeriodLabel(period.startDate, period.endDate)}
+          </p>
+          <p className="mt-0.5 text-[11px] uppercase tracking-[0.16em] text-slate-500">
+            {period.type === "quarterly" ? "Trimestre" : "Mois"}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+            Montant final
+          </p>
+          <p
+            className={`font-mono text-base font-semibold tabular-nums sm:text-lg ${
+              result.safe < 0 ? "text-rose-400" : "text-emerald-400"
+            }`}
+          >
+            {result.safe < 0 && (
+              <span className="mr-0.5 font-sans text-slate-500">−</span>
+            )}
+            {formatEuro(Math.abs(result.safe))}
+          </p>
+        </div>
+      </div>
+
+      <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-5">
+        <PreviousPeriodMetric label="CA" amount={result.ca} tone="positive" />
+        <PreviousPeriodMetric
+          label="URSSAF"
+          amount={result.urssafDue}
+          tone="negative"
+        />
+        <PreviousPeriodMetric
+          label="Réserve"
+          amount={result.reserve}
+          tone="negative"
+        />
+        <PreviousPeriodMetric
+          label="Retraits"
+          amount={result.withdrawals}
+          tone="negative"
+        />
+        <PreviousPeriodMetric
+          label="Dépenses"
+          amount={result.expenses}
+          tone="negative"
+        />
+      </dl>
+    </li>
+  );
+}
+
+function PreviousPeriodMetric({
+  label,
+  amount,
+  tone,
+}: {
+  label: string;
+  amount: number;
+  tone: "positive" | "negative";
+}) {
+  const valueColor = tone === "positive" ? "text-emerald-400" : "text-rose-400";
+  const sign = tone === "positive" || amount === 0 ? "" : "−";
+  return (
+    <div className="min-w-0">
+      <dt className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+        {label}
+      </dt>
+      <dd
+        className={`mt-0.5 truncate font-mono text-sm font-medium tabular-nums ${valueColor}`}
+      >
+        {sign && <span className="mr-0.5 font-sans text-slate-500">{sign}</span>}
+        {formatEuro(amount)}
+      </dd>
+    </div>
+  );
+}
+
+/**
+ * Human-friendly range label for an archived period. We display the
+ * inclusive start day → exclusive end day as a closed range, e.g.
+ * "1 avr. 2026 → 30 avr. 2026" (one day before nextPeriod.start_date).
+ */
+function formatPeriodLabel(startIso: string, endIso: string): string {
+  const start = new Date(startIso);
+  const endExclusive = new Date(endIso);
+  // Show the LAST included day (end - 1ms), which reads better than the
+  // raw exclusive boundary.
+  const lastIncluded = new Date(endExclusive.getTime() - 1);
+  const fmt = (d: Date) =>
+    d.toLocaleDateString("fr-FR", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  return `${fmt(start)} → ${fmt(lastIncluded)}`;
 }
 
 function formatEuro(amount: number | string): string {

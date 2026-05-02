@@ -5,21 +5,23 @@
  *
  * Selection rule: the most recent row in `periods` ordered by `start_date DESC`.
  *
- * Auto-create: if no period row exists yet, one is inserted automatically
- * with `start_date` = start of the user's current URSSAF declaration period:
- *   - monthly   → first day of the current UTC month   at 00:00:00Z
- *   - quarterly → first day of the current UTC quarter at 00:00:00Z
- * These backdated boundaries ensure any transaction logged so far in the
- * current month/quarter is included in the KPI on the very first page load.
+ * Auto-rotation (the important UX rule):
+ * The dashboard label MUST match the current calendar month / quarter. If
+ * the latest period's `start_date` lies BEFORE the start of the current
+ * calendar period (because the user was around in a previous month and
+ * never explicitly reset), this hook quietly inserts a new period at the
+ * calendar boundary and treats it as the active one. Effect:
+ *   - User signed up in April, opens the app on May 2 → dashboard rolls
+ *     to "Mai 2026" automatically.
+ *   - All April data stays inside the previous (now archived) period —
+ *     nothing is moved, nothing is lost, nothing is double-counted.
  *
- * Manual reset (the "Nouvelle période URSSAF" button) is intentionally
- * different: it stores `start_date = new Date().toISOString()` — the exact
- * instant of the click — so every transaction that exists *before* that
- * moment is excluded and the KPI restarts from zero.
- *
- * The hook returns whatever `start_date` is stored in the database, with
- * NO normalization. This is critical: normalizing a manual reset back to
- * midnight UTC would re-include same-day transactions and defeat the reset.
+ * Auto-create: if NO period row exists yet (brand-new user), one is
+ * inserted with `start_date` = current calendar boundary:
+ *   - monthly   → first day of the current UTC month
+ *   - quarterly → first day of the current UTC quarter
+ * Either way, transactions logged so far in the current period land
+ * inside the KPI from the very first page load.
  *
  * Realtime: subscribes to Postgres Changes on `periods` so a "Nouvelle
  * période" insert instantly propagates to the KPI without a page refresh.
@@ -32,7 +34,17 @@ import { supabase } from "./supabase";
 
 export type CurrentPeriodState =
   | { status: "loading" }
-  | { status: "ready"; periodStart: string }
+  | {
+      status: "ready";
+      periodStart: string;
+      /**
+       * Frequency stored on the active period row. The dashboard label
+       * derives from THIS, not from `urssaf_profile.declaration_frequency`,
+       * so a period created when the user was monthly stays labelled as a
+       * month even after they switch to quarterly mid-year.
+       */
+      periodType: PeriodType;
+    }
   | { status: "error"; error: string };
 
 // ---------------------------------------------------------------------------
@@ -53,6 +65,82 @@ function startOfQuarterUTC(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Insert helper — used both for the very-first period and for auto-rotation.
+// Keeping it in one place ensures the race-handling (concurrent tab re-fetch)
+// is identical in both code paths.
+// ---------------------------------------------------------------------------
+
+type Setter = (next: CurrentPeriodState) => void;
+
+async function insertAndApply(args: {
+  userId: string;
+  frequency: PeriodType;
+  startDate: string;
+  cancelledRef: () => boolean;
+  setState: Setter;
+  fallback?: { periodStart: string; periodType: PeriodType };
+}): Promise<void> {
+  const { userId, frequency, startDate, cancelledRef, setState, fallback } = args;
+
+  const { data: created, error: insertError } = await supabase
+    .from("periods")
+    .insert({
+      user_id: userId,
+      type: frequency,
+      start_date: startDate,
+      current_ca: 0,
+    })
+    .select("start_date, type")
+    .single();
+
+  if (cancelledRef()) return;
+
+  if (!insertError && created) {
+    setState({
+      status: "ready",
+      periodStart: created.start_date,
+      periodType: created.type as PeriodType,
+    });
+    return;
+  }
+
+  // Insert failed — most often this is a concurrent tab that already
+  // inserted the same boundary row. Re-fetch the latest and apply it.
+  const { data: retry } = await supabase
+    .from("periods")
+    .select("start_date, type")
+    .eq("user_id", userId)
+    .order("start_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (cancelledRef()) return;
+
+  if (retry) {
+    setState({
+      status: "ready",
+      periodStart: retry.start_date,
+      periodType: retry.type as PeriodType,
+    });
+    return;
+  }
+
+  if (fallback) {
+    setState({
+      status: "ready",
+      periodStart: fallback.periodStart,
+      periodType: fallback.periodType,
+    });
+    return;
+  }
+
+  setState({
+    status: "error",
+    error: insertError?.message ?? "period creation failed",
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
 
@@ -65,10 +153,27 @@ export function useCurrentPeriod(userId: string | null): CurrentPeriodState {
     let cancelled = false;
 
     const load = async () => {
-      // ── 1. Look for the most recent period row ──────────────────────────
+      // ── 1. Resolve the user's declared frequency ────────────────────────
+      // We need this BEFORE anything else: it dictates which calendar
+      // boundary we measure against (month vs. quarter), and which `type`
+      // we stamp on any rows we insert.
+      const { data: urssaf } = await supabase
+        .from("urssaf_profile")
+        .select("declaration_frequency")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (cancelled) return;
+
+      const frequency =
+        (urssaf?.declaration_frequency as PeriodType | undefined) ?? "monthly";
+      const calendarBoundary =
+        frequency === "quarterly" ? startOfQuarterUTC() : startOfMonthUTC();
+
+      // ── 2. Look for the most recent period row ──────────────────────────
       const { data, error } = await supabase
         .from("periods")
-        .select("id, start_date")
+        .select("id, start_date, type")
         .eq("user_id", userId)
         .order("start_date", { ascending: false })
         .limit(1)
@@ -81,67 +186,47 @@ export function useCurrentPeriod(userId: string | null): CurrentPeriodState {
         return;
       }
 
-      if (data) {
-        // Return whatever is stored — no normalization. The KPI filter is
-        // `created_at >= start_date`, which is correct regardless of whether
-        // start_date is at midnight UTC (initial period) or an exact timestamp
-        // (manual reset).
-        setState({ status: "ready", periodStart: data.start_date });
+      // ── 3. No period at all → create the initial one ────────────────────
+      if (!data) {
+        await insertAndApply({
+          userId,
+          frequency,
+          startDate: calendarBoundary,
+          cancelledRef: () => cancelled,
+          setState,
+        });
         return;
       }
 
-      // ── 2. No period — fetch declaration frequency for correct boundary ─
-      const { data: urssaf } = await supabase
-        .from("urssaf_profile")
-        .select("declaration_frequency")
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (cancelled) return;
-
-      const frequency =
-        (urssaf?.declaration_frequency as PeriodType | undefined) ?? "monthly";
-      const startDate =
-        frequency === "quarterly" ? startOfQuarterUTC() : startOfMonthUTC();
-
-      // ── 3. Insert the initial period ────────────────────────────────────
-      const { data: created, error: insertError } = await supabase
-        .from("periods")
-        .insert({
-          user_id: userId,
-          type: frequency,
-          start_date: startDate,
-          current_ca: 0,
-        })
-        .select("start_date")
-        .single();
-
-      if (cancelled) return;
-
-      if (insertError || !created) {
-        // Concurrent tab may have already inserted — re-fetch to get it.
-        const { data: retry } = await supabase
-          .from("periods")
-          .select("start_date")
-          .eq("user_id", userId)
-          .order("start_date", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        if (cancelled) return;
-
-        if (retry) {
-          setState({ status: "ready", periodStart: retry.start_date });
-        } else {
-          setState({
-            status: "error",
-            error: insertError?.message ?? "period creation failed",
-          });
-        }
+      // ── 4. Latest period is stale → auto-rotate ─────────────────────────
+      // "Stale" means the start_date lies strictly before the start of
+      // today's calendar month/quarter. We never touch the existing row;
+      // we just insert a new one at the calendar boundary so the user's
+      // dashboard rolls forward to the right month automatically.
+      if (new Date(data.start_date).getTime() < new Date(calendarBoundary).getTime()) {
+        await insertAndApply({
+          userId,
+          frequency,
+          startDate: calendarBoundary,
+          cancelledRef: () => cancelled,
+          setState,
+          // Fallback to keeping the (stale) latest period if the rotate
+          // insert fails for any reason — better stale label than a
+          // broken dashboard.
+          fallback: {
+            periodStart: data.start_date,
+            periodType: data.type as PeriodType,
+          },
+        });
         return;
       }
 
-      setState({ status: "ready", periodStart: created.start_date });
+      // ── 5. Latest period is fresh enough — use it as-is ─────────────────
+      setState({
+        status: "ready",
+        periodStart: data.start_date,
+        periodType: data.type as PeriodType,
+      });
     };
 
     void load();

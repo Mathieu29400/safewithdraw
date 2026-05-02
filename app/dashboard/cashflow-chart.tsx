@@ -7,6 +7,12 @@
  * Single primary line. No grid, no companion series, no legend — just the
  * curve, soft gradient, and a clean tooltip on hover.
  *
+ * Scoping: the chart follows the dashboard's view toggle.
+ *   - "Période actuelle" → parent passes `period = { start: periodStart }`
+ *     and the series is filtered to the current URSSAF period only.
+ *   - "All-time"         → parent omits `period` and the chart spans the
+ *     full user history.
+ *
  * Data source: `useSafeWithdrawSeries`, which delegates the math to
  * `computeSafeWithdrawSeries` in the engine. NO formula lives here — the
  * chart is purely a viewport on the engine's output.
@@ -22,18 +28,32 @@ import {
   YAxis,
 } from "recharts";
 
+import type { PeriodRange } from "@/lib/use-safe-withdraw";
 import { useSafeWithdrawSeries } from "@/lib/use-safe-withdraw-series";
 
 type Props = {
   userId: string | null;
   advancedMode?: boolean;
+  /**
+   * Optional period range. When set, the chart shows only data inside it.
+   * Pass `undefined` for the all-time view.
+   */
+  period?: PeriodRange;
+  /**
+   * When `true`, the empty state copy is tailored to a freshly reset
+   * period ("aucune transaction sur cette période") instead of the
+   * generic "pas assez d'historique" message used for all-time.
+   */
+  emptyVariant?: "all-time" | "current-period";
 };
 
-export function CashflowChart({ userId, advancedMode }: Props) {
-  // Chart is intentionally NOT scoped to the current URSSAF period — it
-  // always displays the user's full historical series. Only the hero KPI
-  // is reset by "Nouvelle période URSSAF".
-  const state = useSafeWithdrawSeries(userId, { advancedMode });
+export function CashflowChart({
+  userId,
+  advancedMode,
+  period,
+  emptyVariant = "all-time",
+}: Props) {
+  const state = useSafeWithdrawSeries(userId, { advancedMode, period });
 
   if (state.status === "loading" || state.status === "no-urssaf-profile") {
     return <ChartSkeleton />;
@@ -50,22 +70,29 @@ export function CashflowChart({ userId, advancedMode }: Props) {
   }
 
   if (state.points.length < 2) {
-    return (
-      <ChartShell>
-        <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
-          <p className="text-sm font-medium text-slate-200">
-            Pas encore d’historique suffisant
-          </p>
-          <p className="mt-1 max-w-sm text-sm text-slate-500">
-            Ajoutez au moins deux transactions sur des dates différentes pour
-            voir l’évolution de votre montant retirable.
-          </p>
-        </div>
-      </ChartShell>
-    );
+    return <ChartEmpty variant={emptyVariant} />;
   }
 
   return <ChartView points={state.points} />;
+}
+
+function ChartEmpty({ variant }: { variant: "all-time" | "current-period" }) {
+  const title =
+    variant === "current-period"
+      ? "Aucune transaction sur cette période"
+      : "Pas encore d’historique suffisant";
+  const subtitle =
+    variant === "current-period"
+      ? "Ajoutez votre premier chiffre d’affaires depuis le début de cette période URSSAF pour voir le graphique apparaître."
+      : "Ajoutez au moins deux transactions sur des dates différentes pour voir l’évolution de votre montant retirable.";
+  return (
+    <ChartShell>
+      <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
+        <p className="text-sm font-medium text-slate-200">{title}</p>
+        <p className="mt-1 max-w-sm text-sm text-slate-500">{subtitle}</p>
+      </div>
+    </ChartShell>
+  );
 }
 
 function ChartView({
