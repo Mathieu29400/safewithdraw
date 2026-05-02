@@ -3,31 +3,19 @@
 /**
  * useSafeWithdraw — live, RLS-safe view of "how much can I withdraw right now?"
  *
- * Default behaviour (no `period` argument): SafeWithdraw is computed against
- * the user's ENTIRE transaction history — all months, all years. This is the
- * dashboard's mode. The KPI is a single global financial safety indicator,
- * not a per-month report.
+ * Default behaviour (no `period` argument): computed against the user's ENTIRE
+ * transaction history — all months, all years. This is the all-time fallback.
  *
- * Optional `period` argument: when a period is passed, the hook scopes both
- * the SQL fetch and the engine to that range. Reserved for future analytics
- * views (per-month, per-quarter, year-to-date…). The dashboard never passes
- * a period.
+ * When a `period` is passed, both transactions and expenses are filtered to
+ * `created_at >= period.start` (and optionally `< period.end`). The current
+ * URSSAF period start_date is the lower bound — any transaction created
+ * before that date belongs to a past period and is excluded from the KPI.
  *
- * Optional `advancedMode` (in `options`): when `true`, also fetch and feed
- * `expenses` to the engine so the KPI subtracts business expenses from the
- * safe amount. When `false`, expenses are ignored entirely (no fetch, no
- * subscription) — the simple-mode UX is unaffected. When `undefined`, the
- * hook stays in `loading` until the parent has resolved the user preference,
- * preventing the KPI from flashing wrong values on first paint.
+ * `advancedMode`: when `true`, also fetch and feed `expenses` to the engine.
+ * When `undefined`, the hook stays in `loading` to avoid flashing wrong values.
  *
- * Storage vs. scope: transactions and expenses are stored unfiltered and
- * remain visible in their respective lists regardless of period. Period
- * only affects the calculation, never the storage.
- *
- * Realtime: subscribes to Postgres Changes on `transactions` and
- * `urssaf_profile` always; on `expenses` only when advanced mode is on. The
- * channel is keyed on `userId + advancedMode` so flipping the flag rebuilds
- * the subscription set cleanly.
+ * Realtime: subscribes to `transactions`, `urssaf_profile`, and optionally
+ * `expenses`. The channel is keyed on `userId + advancedMode`.
  */
 
 import { useEffect, useState } from "react";
@@ -97,14 +85,12 @@ export function useSafeWithdraw(
         return;
       }
 
-      let txQuery = supabase
+      // Fetch ALL transactions for the user, then filter client-side. Pure
+      // Date comparison via getTime() — no string equality, no timezone tricks.
+      const { data: allTxs, error: txError } = await supabase
         .from("transactions")
         .select("type, amount, created_at")
         .eq("user_id", userId);
-      if (periodStart) txQuery = txQuery.gte("created_at", periodStart);
-      if (periodEnd) txQuery = txQuery.lt("created_at", periodEnd);
-
-      const { data: txs, error: txError } = await txQuery;
       if (cancelled) return;
 
       if (txError) {
@@ -112,32 +98,54 @@ export function useSafeWithdraw(
         return;
       }
 
+      const allTxsList = (allTxs ?? []) as CashflowTransaction[];
+
+      const periodStartMs = periodStart
+        ? new Date(periodStart).getTime()
+        : Number.NEGATIVE_INFINITY;
+      const periodEndMs = periodEnd
+        ? new Date(periodEnd).getTime()
+        : Number.POSITIVE_INFINITY;
+
+      const filteredTxs = allTxsList.filter((t) => {
+        const ts = new Date(t.created_at).getTime();
+        return ts >= periodStartMs && ts < periodEndMs;
+      });
+
       let expenses: CashflowExpense[] | undefined;
       if (advancedMode) {
-        let expQuery = supabase
+        const { data: allExp, error: expError } = await supabase
           .from("expenses")
           .select("amount, created_at")
           .eq("user_id", userId);
-        if (periodStart) expQuery = expQuery.gte("created_at", periodStart);
-        if (periodEnd) expQuery = expQuery.lt("created_at", periodEnd);
-
-        const { data: expRows, error: expError } = await expQuery;
         if (cancelled) return;
 
         if (expError) {
           setState({ status: "error", error: expError.message });
           return;
         }
-        expenses = (expRows ?? []) as CashflowExpense[];
+
+        const allExpList = (allExp ?? []) as CashflowExpense[];
+        expenses = allExpList.filter((e) => {
+          const ts = new Date(e.created_at).getTime();
+          return ts >= periodStartMs && ts < periodEndMs;
+        });
       }
 
       try {
+        // Pass the already-filtered list with NO periodStart so the engine
+        // does not double-filter. The hook is the single source of truth for
+        // period scoping.
         const result = computeSafeWithdraw({
-          transactions: (txs ?? []) as CashflowTransaction[],
+          transactions: filteredTxs,
           urssafRate: urssaf.urssaf_rate,
-          periodStart,
-          periodEnd,
           expenses,
+        });
+        // [TEMP DIAG] confirms how many tx/expenses fall into the current period.
+        console.log("[useSafeWithdraw] period counts", {
+          periodStart,
+          txInPeriod: filteredTxs.length,
+          expensesInPeriod: expenses?.length ?? 0,
         });
         setState({ status: "ready", data: result });
       } catch (err) {

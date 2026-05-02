@@ -30,6 +30,9 @@ type Props = {
 };
 
 export function CashflowChart({ userId, advancedMode }: Props) {
+  // Chart is intentionally NOT scoped to the current URSSAF period — it
+  // always displays the user's full historical series. Only the hero KPI
+  // is reset by "Nouvelle période URSSAF".
   const state = useSafeWithdrawSeries(userId, { advancedMode });
 
   if (state.status === "loading" || state.status === "no-urssaf-profile") {

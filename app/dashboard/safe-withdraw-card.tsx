@@ -27,8 +27,7 @@
 import { AnimatedCurrency } from "@/lib/animated-currency";
 import type { CashflowResult } from "@/lib/cashflow";
 import { useAnimatedNumber } from "@/lib/use-animated-number";
-import { useSafeWithdraw } from "@/lib/use-safe-withdraw";
-import type { PeriodRange } from "@/lib/use-safe-withdraw";
+import { useSafeWithdraw, type PeriodRange } from "@/lib/use-safe-withdraw";
 
 /** 700 ms — matches AnimatedCurrency default and the spec window 500–800 ms. */
 const HERO_ANIM_DURATION_MS = 700;
@@ -42,14 +41,12 @@ type Props = {
    */
   advancedMode?: boolean;
   /**
-   * Start of the current URSSAF period (ISO timestamp).
+   * Start of the current URSSAF period (ISO timestamp from `periods.start_date`).
    * - `undefined` → period not yet resolved; hold the hook in skeleton mode
    *   to prevent flashing all-time data before the period is known.
-   * - `null` → no period row; compute KPI against all-time transactions
-   *   (backwards-compatible for users who have never reset their period).
    * - `string` → filter transactions to `created_at >= periodStart`.
    */
-  periodStart?: string | null;
+  periodStart?: string;
 };
 
 export function SafeWithdrawCard({ userId, advancedMode, periodStart }: Props) {

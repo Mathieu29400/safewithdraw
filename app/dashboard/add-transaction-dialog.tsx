@@ -64,7 +64,14 @@ export function AddTransactionDialog({
       return;
     }
 
-    const isoDate = parseLocalDateToIso(date);
+    // When the user keeps "today" as the date, store the EXACT current
+    // timestamp instead of noon UTC. This is critical right after a
+    // "Nouvelle période URSSAF" reset: the new period starts at the click
+    // moment, and any new transaction the user logs today must land AFTER
+    // that moment to be included in the fresh KPI.
+    // For past dates, keep the noon-UTC anchor (timezone-safe backfilling).
+    const isoDate =
+      date === todayLocalIso() ? new Date().toISOString() : parseLocalDateToIso(date);
     if (!isoDate) {
       setError("Date invalide.");
       return;

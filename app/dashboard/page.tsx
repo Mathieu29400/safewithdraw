@@ -48,6 +48,8 @@ export default function DashboardPage() {
   // `undefined` while loading so SafeWithdrawCard stays in skeleton mode and
   // we never flash all-time data before the period is known.
   const currentPeriodState = useCurrentPeriod(userId);
+  // `undefined` while loading (holds SafeWithdrawCard in skeleton mode);
+  // a string once the period is resolved (auto-created if none existed).
   const periodStart =
     currentPeriodState.status === "ready"
       ? currentPeriodState.periodStart
@@ -375,15 +377,21 @@ export default function DashboardPage() {
           open={newPeriodDialogOpen}
           onOpenChange={setNewPeriodDialogOpen}
           onConfirm={() => {
-            // Insert a new period row. The `useCurrentPeriod` realtime
-            // subscription will pick up the INSERT and update `periodStart`,
-            // which causes `useSafeWithdraw` to re-scope to the new period.
+            // Insert a new period with `start_date = exact moment of click`.
+            // Sub-day timestamp is INTENTIONAL: every transaction logged
+            // earlier today belongs to the previous period and must be
+            // excluded from the fresh KPI. The `useCurrentPeriod` realtime
+            // subscription picks up the INSERT and re-scopes the dashboard.
             // Historical data (transactions, withdrawals, previous periods)
-            // is never touched — only the KPI's lower bound changes.
+            // is never deleted — only the KPI's lower bound moves.
+            const newStartDate = new Date().toISOString();
+            // [TEMP DIAG] confirm before/after period boundaries when resetting.
+            console.log("[reset] previous periodStart →", periodStart);
+            console.log("[reset] new periodStart →", newStartDate);
             void supabase.from("periods").insert({
               user_id: userId,
               type: declarationFrequency,
-              start_date: new Date().toISOString(),
+              start_date: newStartDate,
               current_ca: 0,
             });
           }}

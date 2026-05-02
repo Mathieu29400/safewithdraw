@@ -5,16 +5,12 @@
  *
  * Same data plumbing pattern (fetch transactions / urssaf rate / opt-in
  * expenses, subscribe to Realtime, refetch on changes) but feeds the data
- * to `computeSafeWithdrawSeries` instead of `computeSafeWithdraw`. The chart
- * therefore tells the SAME truth as the hero KPI: same constants, same
- * formula, same source of transactions. The two hooks differ only in the
- * shape of their output.
+ * to `computeSafeWithdrawSeries` instead of `computeSafeWithdraw`.
  *
- * Kept separate from `useSafeWithdraw` on purpose:
- *   1. The dashboard hero card and the chart can resolve independently —
- *      the chart will fail-soft to "no data" without taking down the KPI.
- *   2. Future analytics views can reuse the chart without paying for the
- *      KPI's reactive overhead.
+ * Scoping: the chart is INTENTIONALLY all-time. It never filters by the
+ * URSSAF period. Resetting the period must NOT make the chart disappear —
+ * the user's full historical context stays visible at all times. Only the
+ * hero KPI is period-scoped.
  */
 
 import { useEffect, useState } from "react";
