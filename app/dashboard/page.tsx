@@ -551,7 +551,7 @@ export default function DashboardPage() {
                 type="button"
                 onClick={() => setNewPeriodDialogOpen(true)}
                 disabled={!userId}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-white/10 px-4 py-2 text-sm font-medium text-slate-400 transition duration-200 hover:scale-[1.02] hover:border-white/20 hover:text-slate-200 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-slate-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-300 shadow-sm shadow-amber-900/20 transition duration-200 hover:scale-[1.02] hover:border-amber-400/60 hover:bg-amber-500/20 hover:text-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-400/30 focus:ring-offset-2 focus:ring-offset-slate-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"

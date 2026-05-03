@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabase";
 export default function SignupPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
+  const [confirmEmail, setConfirmEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -29,6 +30,11 @@ export default function SignupPage() {
     e.preventDefault();
     setError(null);
     setInfo(null);
+
+    if (email !== confirmEmail) {
+      setError("Les adresses email ne correspondent pas.");
+      return;
+    }
 
     const validationError = validatePassword(password);
     if (validationError) {
@@ -53,6 +59,15 @@ export default function SignupPage() {
     }
 
     if (data.session) {
+      console.log("[signup] Signup success, sending welcome email to:", email);
+      fetch("/api/send-welcome", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      })
+        .then((res) => res.json())
+        .then((json) => console.log("[signup] send-welcome response:", json))
+        .catch((err) => console.error("[signup] send-welcome fetch error:", err));
       router.replace("/dashboard");
       return;
     }
@@ -103,6 +118,37 @@ export default function SignupPage() {
                 className="mt-1.5 block w-full rounded-lg border border-white/10 bg-white/5 px-3.5 py-2.5 text-slate-100 placeholder:text-slate-500 shadow-sm focus:border-emerald-500/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
                 placeholder="vous@exemple.com"
               />
+            </div>
+
+            <div>
+              <label
+                htmlFor="confirmEmail"
+                className="block text-sm font-medium text-slate-300"
+              >
+                Confirmer l&apos;email
+              </label>
+              <input
+                id="confirmEmail"
+                name="confirmEmail"
+                type="email"
+                autoComplete="email"
+                required
+                value={confirmEmail}
+                onChange={(e) => setConfirmEmail(e.target.value)}
+                className={`mt-1.5 block w-full rounded-lg border bg-white/5 px-3.5 py-2.5 text-slate-100 placeholder:text-slate-500 shadow-sm focus:outline-none focus:ring-2 transition ${
+                  confirmEmail.length > 0 && email !== confirmEmail
+                    ? "border-rose-500/50 focus:border-rose-500/50 focus:ring-rose-500/20"
+                    : confirmEmail.length > 0 && email === confirmEmail
+                      ? "border-emerald-500/40 focus:border-emerald-500/50 focus:ring-emerald-500/30"
+                      : "border-white/10 focus:border-emerald-500/50 focus:ring-emerald-500/30"
+                }`}
+                placeholder="Confirme ton email"
+              />
+              {confirmEmail.length > 0 && email === confirmEmail && (
+                <p className="mt-1.5 flex items-center gap-1 text-xs text-emerald-500">
+                  <span aria-hidden>✓</span> Les adresses correspondent.
+                </p>
+              )}
             </div>
 
             <div>

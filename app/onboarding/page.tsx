@@ -134,6 +134,32 @@ export default function OnboardingPage() {
       return;
     }
 
+    // Create the first period immediately so the dashboard starts on the
+    // correct current month/quarter — avoids any timezone edge-case in the
+    // hook's auto-create path (e.g. midnight UTC vs local time).
+    const now = new Date();
+    const periodStart =
+      declarationFrequency === "quarterly"
+        ? new Date(
+            Date.UTC(
+              now.getUTCFullYear(),
+              Math.floor(now.getUTCMonth() / 3) * 3,
+              1,
+            ),
+          ).toISOString()
+        : new Date(
+            Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+          ).toISOString();
+
+    // Ignore errors here: if the insert races with the hook's auto-create
+    // (e.g. the user opens a second tab), the hook will still find the row.
+    await supabase.from("periods").insert({
+      user_id: userId,
+      type: declarationFrequency,
+      start_date: periodStart,
+      current_ca: 0,
+    });
+
     router.replace("/dashboard");
   };
 

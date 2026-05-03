@@ -94,24 +94,24 @@ export default function HomePage() {
                 Montant retirable
               </p>
               <p className="mt-2 text-4xl font-semibold tabular-nums text-emerald-200 sm:text-5xl">
-                2 480,00 €
+                2 523,20 €
               </p>
 
               <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <ProofTile label="CA" value="7 800,00 €" tone="positive" />
+                <ProofTile label="CA du mois" value="7 800,00 €" tone="positive" />
                 <ProofTile
-                  label="URSSAF"
+                  label="URSSAF freelance (25,6 %)"
                   value="−1 996,80 €"
                   tone="negative"
                 />
                 <ProofTile
-                  label="Réserve de sécurité recommandée"
+                  label="Réserve de sécurité (10 %)"
                   value="−780,00 €"
                   tone="negative"
                 />
                 <ProofTile
-                  label="Retraits"
-                  value="−2 543,20 €"
+                  label="Argent déjà retiré"
+                  value="−2 500,00 €"
                   tone="negative"
                 />
               </div>
@@ -148,15 +148,16 @@ export default function HomePage() {
                     strokeWidth="4"
                     strokeLinecap="round"
                   />
-                  <text x="60" y="214" fill="#64748b" fontSize="11">01 avr</text>
-                  <text x="240" y="214" fill="#64748b" fontSize="11">12 avr</text>
-                  <text x="420" y="214" fill="#64748b" fontSize="11">24 avr</text>
-                  <text x="550" y="214" fill="#64748b" fontSize="11">30 avr</text>
+                  <text x="60" y="214" fill="#64748b" fontSize="11">01 mai</text>
+                  <text x="240" y="214" fill="#64748b" fontSize="11">12 mai</text>
+                  <text x="420" y="214" fill="#64748b" fontSize="11">24 mai</text>
+                  <text x="550" y="214" fill="#64748b" fontSize="11">31 mai</text>
                 </svg>
               </div>
             </div>
-            <p className="mt-4 text-center text-sm text-slate-400">
-              Une vue claire, en temps réel, sans calculs.
+            <p className="mt-4 text-center text-xs text-slate-500">
+              Exemple pour un freelance avec un taux URSSAF de 25,6 %. Le calcul
+              automatique fonctionne aussi avec tous les autres taux URSSAF existants.
             </p>
           </div>
         </section>

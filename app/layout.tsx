@@ -30,6 +30,15 @@ export default function RootLayout({
     >
       <body className="flex min-h-full flex-col text-slate-100">
         {children}
+        <footer className="mt-auto border-t border-white/[0.06] py-6 text-center text-sm text-slate-500">
+          Une question ?{" "}
+          <a
+            href="mailto:safewithdraw.contact@gmail.com"
+            className="text-slate-400 transition hover:text-slate-200 hover:underline"
+          >
+            safewithdraw.contact@gmail.com
+          </a>
+        </footer>
       </body>
     </html>
   );
