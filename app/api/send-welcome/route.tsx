@@ -36,6 +36,7 @@ export async function POST(req: NextRequest) {
   const { data, error } = await resend.emails.send(
     {
       from: "SafeWithdraw <hello@safewithdraw.app>",
+      reply_to: "safewithdraw.contact@gmail.com",
       to: email,
       subject: "Bienvenue sur SafeWithdraw 🚀",
       html,
