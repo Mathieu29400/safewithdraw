@@ -28,6 +28,7 @@ export type Database = {
           trial_end: string;
           subscription_status: SubscriptionStatus;
           advanced_mode: boolean;
+          paddle_customer_id: string | null;
         };
         Insert: {
           id: string;
@@ -36,6 +37,7 @@ export type Database = {
           trial_end?: string;
           subscription_status?: SubscriptionStatus;
           advanced_mode?: boolean;
+          paddle_customer_id?: string | null;
         };
         Update: {
           id?: string;
@@ -44,6 +46,7 @@ export type Database = {
           trial_end?: string;
           subscription_status?: SubscriptionStatus;
           advanced_mode?: boolean;
+          paddle_customer_id?: string | null;
         };
         Relationships: [
           {

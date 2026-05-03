@@ -460,6 +460,37 @@ export default function DashboardPage() {
     router.replace("/login");
   };
 
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [portalError, setPortalError] = useState<string | null>(null);
+
+  const handleManageSubscription = useCallback(async () => {
+    setPortalError(null);
+    setPortalLoading(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        setPortalError("Veuillez vous reconnecter.");
+        return;
+      }
+      const res = await fetch("/api/paddle/customer-portal", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const json = (await res.json()) as { url?: string; error?: string };
+      if (!res.ok || !json.url) {
+        setPortalError(json.error ?? "Impossible d’ouvrir le portail.");
+        return;
+      }
+      window.location.href = json.url;
+    } catch (err) {
+      console.error("[manage-subscription] failed:", err);
+      setPortalError("Erreur réseau, réessayez.");
+    } finally {
+      setPortalLoading(false);
+    }
+  }, []);
+
   return (
     <div className="flex flex-1 flex-col">
       <header className="border-b border-white/5 bg-slate-950/70 backdrop-blur-xl">
@@ -467,12 +498,20 @@ export default function DashboardPage() {
           <span className="text-base font-semibold tracking-tight text-slate-100">
             SafeWithdraw
           </span>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4">
             {email && (
               <span className="hidden text-sm text-slate-500 sm:inline">
                 {email}
               </span>
             )}
+            <button
+              type="button"
+              onClick={handleManageSubscription}
+              disabled={portalLoading}
+              className="inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-sm font-medium text-slate-300 ring-1 ring-white/10 transition hover:bg-white/5 hover:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {portalLoading ? "Ouverture…" : "Gérer mon abonnement"}
+            </button>
             <button
               type="button"
               onClick={handleSignOut}
@@ -483,6 +522,13 @@ export default function DashboardPage() {
             </button>
           </div>
         </div>
+        {portalError && (
+          <div className="mx-auto w-full max-w-5xl px-4 pb-3 sm:px-6">
+            <p className="rounded-lg border border-rose-500/30 bg-rose-950/50 px-3 py-2 text-sm text-rose-200">
+              {portalError}
+            </p>
+          </div>
+        )}
       </header>
 
       <main className="mx-auto w-full max-w-5xl flex-1 space-y-14 px-4 py-12 sm:space-y-20 sm:px-6 sm:py-16">
