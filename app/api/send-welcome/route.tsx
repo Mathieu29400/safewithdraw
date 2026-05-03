@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
   }
 
   const resend = new Resend(apiKey);
-  const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "https://safewithdraw.com"}/dashboard`;
+  const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "https://safewithdraw.app"}/dashboard`;
 
   const [html, text] = await Promise.all([
     render(<WelcomeEmail dashboardUrl={dashboardUrl} />),

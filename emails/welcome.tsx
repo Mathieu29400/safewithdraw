@@ -18,7 +18,7 @@ interface WelcomeEmailProps {
 }
 
 export default function WelcomeEmail({
-  dashboardUrl = "https://safewithdraw.com/dashboard",
+  dashboardUrl = "https://safewithdraw.app/dashboard",
 }: WelcomeEmailProps) {
   return (
     <Html lang="fr">
@@ -108,10 +108,10 @@ export default function WelcomeEmail({
               <Text className="m-0 text-12 text-slate-400">
                 Une question ?{" "}
                 <a
-                  href="mailto:safewithdraw.contact@gmail.com"
+                  href="mailto:hello@safewithdraw.app"
                   className="text-slate-500 underline"
                 >
-                  safewithdraw.contact@gmail.com
+                  hello@safewithdraw.app
                 </a>
               </Text>
               <Text className="m-0 mt-8 text-12 text-slate-400">
@@ -126,5 +126,5 @@ export default function WelcomeEmail({
 }
 
 WelcomeEmail.PreviewProps = {
-  dashboardUrl: "https://safewithdraw.com/dashboard",
+  dashboardUrl: "https://safewithdraw.app/dashboard",
 } satisfies WelcomeEmailProps;
