@@ -36,6 +36,14 @@ create table if not exists public.profiles (
 alter table public.profiles
   add column if not exists advanced_mode boolean not null default false;
 
+-- Paddle Billing: customer id (ctm_) populated by /api/paddle/webhook
+alter table public.profiles
+  add column if not exists paddle_customer_id text;
+
+create unique index if not exists profiles_paddle_customer_id_key
+  on public.profiles (paddle_customer_id)
+  where paddle_customer_id is not null;
+
 -- =============================================================================
 -- 2. transactions
 -- =============================================================================
