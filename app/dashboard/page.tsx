@@ -1251,7 +1251,7 @@ function DeleteRowButton({
       onClick={() => setArmed(true)}
       aria-label={ariaLabel}
       title="Supprimer"
-      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 opacity-0 transition hover:bg-rose-500/10 hover:text-rose-300 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-rose-500/30 group-hover:opacity-100"
+      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition hover:bg-rose-500/10 hover:text-rose-300 focus:outline-none focus:ring-2 focus:ring-rose-500/30"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
