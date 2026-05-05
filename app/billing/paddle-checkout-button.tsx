@@ -74,9 +74,15 @@ export function PaddleCheckoutButton({
         // Verbose checkout instrumentation. Every Paddle.js event is
         // logged so a "Something went wrong" overlay can be diagnosed
         // by reading the console (Paddle never surfaces the underlying
-        // error code in the overlay itself). Errors get a louder log
-        // level so they stand out in the network inspector.
-        if (event.name === "checkout.error" || event.error) {
+        // error code in the overlay itself). Error events get a louder
+        // log level so they stand out in the network inspector.
+        const isErrorEvent =
+          event.name === "checkout.error" ||
+          event.name === "checkout.payment.error" ||
+          event.name === "checkout.failed" ||
+          event.name === "checkout.payment.failed" ||
+          typeof event.code === "string";
+        if (isErrorEvent) {
           console.error("[paddle-checkout]", event.name ?? "error", event);
         } else {
           console.log("[paddle-checkout]", event.name, event);
