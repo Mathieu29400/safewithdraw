@@ -71,6 +71,16 @@ export function PaddleCheckoutButton({
       environment: PADDLE_ENV,
       token: PADDLE_TOKEN!,
       eventCallback: (event: PaddleEventData) => {
+        // Verbose checkout instrumentation. Every Paddle.js event is
+        // logged so a "Something went wrong" overlay can be diagnosed
+        // by reading the console (Paddle never surfaces the underlying
+        // error code in the overlay itself). Errors get a louder log
+        // level so they stand out in the network inspector.
+        if (event.name === "checkout.error" || event.error) {
+          console.error("[paddle-checkout]", event.name ?? "error", event);
+        } else {
+          console.log("[paddle-checkout]", event.name, event);
+        }
         if (event.name === "checkout.completed") {
           completedHandlerRef.current?.();
         }
@@ -98,19 +108,27 @@ export function PaddleCheckoutButton({
   const handleClick = useCallback(() => {
     if (!paddle || configMissing) return;
     setOpening(true);
+    const openArgs = {
+      items: [{ priceId: PADDLE_PRICE_ID!, quantity: 1 }],
+      customer: { email },
+      customData: { user_id: userId, email },
+      settings: {
+        displayMode: "overlay" as const,
+        theme: "dark" as const,
+        locale: "fr",
+      },
+    };
+    console.log("[paddle-checkout] opening", {
+      environment: PADDLE_ENV,
+      tokenPrefix: PADDLE_TOKEN?.slice(0, 14) + "…",
+      priceId: PADDLE_PRICE_ID,
+      origin: typeof window !== "undefined" ? window.location.origin : "ssr",
+      args: openArgs,
+    });
     try {
-      paddle.Checkout.open({
-        items: [{ priceId: PADDLE_PRICE_ID!, quantity: 1 }],
-        customer: { email },
-        customData: { user_id: userId, email },
-        settings: {
-          displayMode: "overlay",
-          theme: "dark",
-          locale: "fr",
-        },
-      });
+      paddle.Checkout.open(openArgs);
     } catch (err) {
-      console.error("[paddle-checkout] open failed:", err);
+      console.error("[paddle-checkout] open() threw:", err);
     } finally {
       setOpening(false);
     }
