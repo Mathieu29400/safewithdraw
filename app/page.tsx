@@ -117,15 +117,15 @@ export default function HomePage() {
               </div>
 
               <div className="mt-6 rounded-xl bg-slate-950/70 p-4 ring-1 ring-white/10">
-                <p className="text-xs text-slate-400">Cashflow</p>
+                <p className="text-xs text-slate-400">Évolution du montant retirable</p>
                 <svg
                   viewBox="0 0 600 230"
                   className="mt-2 h-44 w-full"
                   role="img"
-                  aria-label="Graphique d'évolution du cashflow"
+                  aria-label="Graphique d'évolution du montant retirable"
                 >
                   <defs>
-                    <linearGradient id="cashfill" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient id="withdrawablefill" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#34d399" stopOpacity="0.45" />
                       <stop offset="100%" stopColor="#34d399" stopOpacity="0" />
                     </linearGradient>
@@ -139,7 +139,7 @@ export default function HomePage() {
                   <line x1="52" y1="150" x2="585" y2="150" stroke="#334155" strokeWidth="1" strokeDasharray="3 4" />
                   <path
                     d="M52,172 C110,128 145,136 185,101 C225,76 276,92 320,79 C365,65 410,78 452,52 C500,28 548,42 580,32 L580,190 L52,190 Z"
-                    fill="url(#cashfill)"
+                    fill="url(#withdrawablefill)"
                   />
                   <path
                     d="M52,172 C110,128 145,136 185,101 C225,76 276,92 320,79 C365,65 410,78 452,52 C500,28 548,42 580,32"

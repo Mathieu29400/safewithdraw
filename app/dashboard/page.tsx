@@ -1,8 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import {
+  formatDaysLeft,
+  getBillingStatus,
+  hasDashboardAccess,
+  type BillingStatus,
+} from "@/lib/billing";
 import { supabase } from "@/lib/supabase";
 import type { Expense, PeriodType, Transaction } from "@/lib/database.types";
 import type { PeriodRange } from "@/lib/use-safe-withdraw";
@@ -81,6 +88,14 @@ export default function DashboardPage() {
   const [email, setEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
+
+  // Billing/access state. `null` while loading. The access guard runs
+  // off this value: anything that isn't trialing-with-time-left or a
+  // paying customer gets redirected to /billing — checkout is the only
+  // path back in (per spec).
+  const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(
+    null,
+  );
 
   // `advanced_mode` is read from profiles. `null` while loading so the
   // SafeWithdrawCard stays in skeleton mode and we don't flash the simple
@@ -214,23 +229,42 @@ export default function DashboardPage() {
     };
   }, []);
 
-  // Read `advanced_mode` from the profile. Default to false on missing/error
-  // so the dashboard remains usable even if the column read hiccups.
+  // Read profile flags (advanced mode + billing) in a single round-trip.
+  //
+  // Default to a permissive state on read errors so a hiccup never locks
+  // the user out of the dashboard. The access rule then runs off the
+  // resolved `billingStatus`: trial-expired / inactive users are
+  // redirected to /billing — that's the only place a checkout can be
+  // opened (per spec).
   useEffect(() => {
     if (!userId) return;
     let cancelled = false;
     supabase
       .from("profiles")
-      .select("advanced_mode")
+      .select("advanced_mode, trial_end, subscription_status")
       .eq("id", userId)
       .maybeSingle()
       .then(({ data }) => {
-        if (!cancelled) setAdvancedMode(data?.advanced_mode ?? false);
+        if (cancelled) return;
+        setAdvancedMode(data?.advanced_mode ?? false);
+        if (data) {
+          const status = getBillingStatus({
+            trial_end: data.trial_end,
+            subscription_status: data.subscription_status,
+          });
+          setBillingStatus(status);
+          if (!hasDashboardAccess(status)) {
+            router.replace("/billing");
+          }
+        } else {
+          setBillingStatus({ kind: "inactive" });
+          router.replace("/billing");
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [userId, router]);
 
   // Read the user's URSSAF declaration frequency so we can tag new periods
   // with the correct type when the user resets their period.
@@ -460,36 +494,13 @@ export default function DashboardPage() {
     router.replace("/login");
   };
 
-  const [portalLoading, setPortalLoading] = useState(false);
-  const [portalError, setPortalError] = useState<string | null>(null);
-
-  const handleManageSubscription = useCallback(async () => {
-    setPortalError(null);
-    setPortalLoading(true);
-    try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData.session?.access_token;
-      if (!accessToken) {
-        setPortalError("Veuillez vous reconnecter.");
-        return;
-      }
-      const res = await fetch("/api/paddle/customer-portal", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      const json = (await res.json()) as { url?: string; error?: string };
-      if (!res.ok || !json.url) {
-        setPortalError(json.error ?? "Impossible d’ouvrir le portail.");
-        return;
-      }
-      window.location.href = json.url;
-    } catch (err) {
-      console.error("[manage-subscription] failed:", err);
-      setPortalError("Erreur réseau, réessayez.");
-    } finally {
-      setPortalLoading(false);
-    }
-  }, []);
+  // Trial badge label — only shown while the user is on the free trial.
+  // Active subscribers see no time-pressure copy; expired users were
+  // already redirected to /billing by the guard above.
+  const trialBadge =
+    billingStatus?.kind === "trialing"
+      ? `Essai gratuit : ${formatDaysLeft(billingStatus.daysLeft)}`
+      : null;
 
   return (
     <div className="flex flex-1 flex-col">
@@ -504,14 +515,12 @@ export default function DashboardPage() {
                 {email}
               </span>
             )}
-            <button
-              type="button"
-              onClick={handleManageSubscription}
-              disabled={portalLoading}
-              className="inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-sm font-medium text-slate-300 ring-1 ring-white/10 transition hover:bg-white/5 hover:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+            <Link
+              href="/billing"
+              className="inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-sm font-medium text-slate-300 ring-1 ring-white/10 transition hover:bg-white/5 hover:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
             >
-              {portalLoading ? "Ouverture…" : "Gérer mon abonnement"}
-            </button>
+              Abonnement
+            </Link>
             <button
               type="button"
               onClick={handleSignOut}
@@ -522,11 +531,20 @@ export default function DashboardPage() {
             </button>
           </div>
         </div>
-        {portalError && (
+        {trialBadge && (
           <div className="mx-auto w-full max-w-5xl px-4 pb-3 sm:px-6">
-            <p className="rounded-lg border border-rose-500/30 bg-rose-950/50 px-3 py-2 text-sm text-rose-200">
-              {portalError}
-            </p>
+            <Link
+              href="/billing"
+              className="group flex items-center justify-between gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.08] px-4 py-2.5 text-sm transition hover:border-emerald-400/40 hover:bg-emerald-500/[0.12] focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+            >
+              <span className="flex items-center gap-2 font-medium text-emerald-200">
+                <span aria-hidden className="text-base">🎉</span>
+                {trialBadge}
+              </span>
+              <span className="text-xs text-emerald-300/80 transition group-hover:text-emerald-200">
+                S’abonner →
+              </span>
+            </Link>
           </div>
         )}
       </header>

@@ -100,6 +100,12 @@ export default function WelcomeEmail({
                 Ton essai gratuit de 30 jours a démarré. Aucune carte bancaire
                 requise, annulable à tout moment.
               </Text>
+
+              <Text className="mt-24 text-14 leading-22 text-slate-600">
+                À très vite,
+                <br />
+                L’équipe SafeWithdraw
+              </Text>
             </Section>
 
             {/* Footer */}

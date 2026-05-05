@@ -26,11 +26,22 @@ create table if not exists public.profiles (
   id                  uuid        primary key references auth.users(id) on delete cascade,
   email               text        not null,
   created_at          timestamptz not null default now(),
-  trial_end           timestamptz not null default (now() + interval '14 days'),
+  trial_end           timestamptz not null default (now() + interval '30 days'),
   subscription_status text        not null default 'trialing'
     check (subscription_status in ('trialing', 'active', 'past_due', 'canceled', 'incomplete')),
   advanced_mode       boolean     not null default false
 );
+
+-- 30-day trial without card. Update default for re-runs of this script,
+-- and backfill any still-trialing profile that was created with the old
+-- 14-day default so every user gets the same 30-day window.
+alter table public.profiles
+  alter column trial_end set default (now() + interval '30 days');
+
+update public.profiles
+set trial_end = created_at + interval '30 days'
+where subscription_status = 'trialing'
+  and trial_end < created_at + interval '30 days';
 
 -- Backfill the `advanced_mode` column on pre-existing databases.
 alter table public.profiles
