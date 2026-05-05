@@ -563,6 +563,59 @@ export default function DashboardPage() {
           archivedPeriods={archivedPeriods}
         />
 
+        {/* Primary actions — surfaced directly under the period selector
+            and above the hero so a brand-new user lands on (1) period,
+            (2) actions, (3) montant retirable without scrolling. Same
+            buttons as the ones inside the Transactions header before;
+            the section heading kept its title-only header. Mobile keeps
+            a stacked column; ≥sm renders a wrapping row. */}
+        <section
+          aria-label="Actions principales"
+          className="-mt-6 flex flex-col gap-2 sm:-mt-10 sm:flex-row sm:flex-wrap sm:gap-3"
+        >
+          <button
+            type="button"
+            onClick={() => setDialogType("income")}
+            disabled={!userId}
+            className="inline-flex items-center justify-center rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white shadow-[0_8px_24px_-8px_rgba(16,185,129,0.6)] transition duration-200 hover:scale-[1.02] hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:ring-offset-2 focus:ring-offset-slate-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
+          >
+            + Ajout de chiffres d’affaires
+          </button>
+          <button
+            type="button"
+            onClick={() => setDialogType("withdrawal")}
+            disabled={!userId}
+            className="inline-flex items-center justify-center rounded-lg bg-white/[0.06] px-4 py-2 text-sm font-medium text-slate-100 shadow-sm ring-1 ring-white/10 backdrop-blur transition duration-200 hover:scale-[1.02] hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-slate-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
+          >
+            Argent déjà retiré
+          </button>
+          <button
+            type="button"
+            onClick={() => setNewPeriodDialogOpen(true)}
+            disabled={!userId}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-300 shadow-sm shadow-amber-900/20 transition duration-200 hover:scale-[1.02] hover:border-amber-400/60 hover:bg-amber-500/20 hover:text-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-400/30 focus:ring-offset-2 focus:ring-offset-slate-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="3" y1="10" x2="21" y2="10" />
+            </svg>
+            Nouvelle période URSSAF
+          </button>
+        </section>
+
         <SafeWithdrawCard
           userId={userId}
           advancedMode={advancedMode ?? undefined}
@@ -582,62 +635,15 @@ export default function DashboardPage() {
           periodType={currentPeriodType ?? undefined}
         />
 
+        {/* Transactions list — the action buttons that used to sit on the
+            right of this header were promoted to a top-of-page section
+            (right under the period selector). Keeping them only there
+            avoids visual duplication; this section now stays a pure
+            history view. */}
         <section className="space-y-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
-              Transactions
-            </h2>
-
-            {/* Action buttons are always visible regardless of the active
-                view. Each entry lands in whichever period its `created_at`
-                falls into (the dialogs default the date to today, so a
-                quick add lands in the live current period). The "Nouvelle
-                période URSSAF" button always advances to the next month
-                and snaps the dashboard back to the new live period. */}
-            <div className="flex flex-shrink-0 flex-col gap-2 sm:flex-row sm:gap-3">
-              <button
-                type="button"
-                onClick={() => setDialogType("income")}
-                disabled={!userId}
-                className="inline-flex items-center justify-center rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white shadow-[0_8px_24px_-8px_rgba(16,185,129,0.6)] transition duration-200 hover:scale-[1.02] hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:ring-offset-2 focus:ring-offset-slate-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
-              >
-                + Ajout de chiffres d’affaires
-              </button>
-              <button
-                type="button"
-                onClick={() => setDialogType("withdrawal")}
-                disabled={!userId}
-                className="inline-flex items-center justify-center rounded-lg bg-white/[0.06] px-4 py-2 text-sm font-medium text-slate-100 shadow-sm ring-1 ring-white/10 backdrop-blur transition duration-200 hover:scale-[1.02] hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-slate-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
-              >
-                Argent déjà retiré
-              </button>
-              <button
-                type="button"
-                onClick={() => setNewPeriodDialogOpen(true)}
-                disabled={!userId}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-300 shadow-sm shadow-amber-900/20 transition duration-200 hover:scale-[1.02] hover:border-amber-400/60 hover:bg-amber-500/20 hover:text-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-400/30 focus:ring-offset-2 focus:ring-offset-slate-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                  <line x1="16" y1="2" x2="16" y2="6" />
-                  <line x1="8" y1="2" x2="8" y2="6" />
-                  <line x1="3" y1="10" x2="21" y2="10" />
-                </svg>
-                Nouvelle période URSSAF
-              </button>
-            </div>
-          </div>
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
+            Transactions
+          </h2>
 
           <HistoryCard
             transactions={filteredHistory}
