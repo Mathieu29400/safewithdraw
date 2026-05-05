@@ -1,8 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database, SubscriptionStatus } from "./database.types";
+import { sendSubscriptionActivatedEmail } from "./send-subscription-activated-email";
 
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Update"];
+
+type ProfileUpdateOutcome = {
+  matched: boolean;
+  previousStatus: SubscriptionStatus | null;
+};
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -78,12 +84,21 @@ async function updateProfileByEmail(
   supabase: SupabaseClient<Database>,
   emailRaw: string,
   patch: ProfileRow,
-): Promise<boolean> {
+): Promise<ProfileUpdateOutcome> {
   const candidates = [
     ...new Set([emailRaw.trim(), normalizeEmail(emailRaw)]),
   ].filter(Boolean);
 
   for (const em of candidates) {
+    // Read the current subscription_status before the update so callers
+    // can detect transitions (e.g., trialing → active) and trigger
+    // side-effects like the activation email exactly once.
+    const { data: existing } = await supabase
+      .from("profiles")
+      .select("subscription_status")
+      .eq("email", em)
+      .maybeSingle();
+
     const { data, error } = await supabase
       .from("profiles")
       .update(patch)
@@ -91,16 +106,44 @@ async function updateProfileByEmail(
       .select("id");
     if (error) {
       console.error("[paddle/webhook] profile update error:", error.message);
-      return false;
+      return { matched: false, previousStatus: null };
     }
-    if (data && data.length > 0) return true;
+    if (data && data.length > 0) {
+      return {
+        matched: true,
+        previousStatus: existing?.subscription_status ?? null,
+      };
+    }
   }
 
   console.warn(
     "[paddle/webhook] no profile row matched email:",
     normalizeEmail(emailRaw),
   );
-  return false;
+  return { matched: false, previousStatus: null };
+}
+
+/**
+ * Side-effect after a profile update: if `patch` flipped the user from
+ * any non-active state to "active", deliver the "Bienvenue sur
+ * SafeWithdraw Pro" email. Idempotent — the helper itself dedupes via
+ * a Resend idempotency key, and we additionally gate on the previous
+ * status so a benign `subscription.updated` (e.g., a renewal) on an
+ * already-active user does not re-trigger the email.
+ */
+async function maybeSendActivationEmail(
+  email: string,
+  patch: ProfileRow,
+  outcome: ProfileUpdateOutcome,
+): Promise<void> {
+  if (!outcome.matched) return;
+  if (patch.subscription_status !== "active") return;
+  if (outcome.previousStatus === "active") return;
+  try {
+    await sendSubscriptionActivatedEmail(email);
+  } catch (err) {
+    console.error("[paddle/webhook] activation email failed:", err);
+  }
 }
 
 async function handleSubscriptionLike(
@@ -120,10 +163,12 @@ async function handleSubscriptionLike(
     return;
   }
 
-  await updateProfileByEmail(supabase, email, {
+  const patch: ProfileRow = {
     paddle_customer_id: customerId,
     subscription_status: mapPaddleSubscriptionStatus(statusRaw),
-  });
+  };
+  const outcome = await updateProfileByEmail(supabase, email, patch);
+  await maybeSendActivationEmail(email, patch, outcome);
 }
 
 async function handleTransactionCompleted(
@@ -158,7 +203,8 @@ async function handleTransactionCompleted(
     }
   }
 
-  await updateProfileByEmail(supabase, email, patch);
+  const outcome = await updateProfileByEmail(supabase, email, patch);
+  await maybeSendActivationEmail(email, patch, outcome);
 }
 
 /**
