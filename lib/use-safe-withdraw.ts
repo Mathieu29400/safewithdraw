@@ -87,9 +87,11 @@ export function useSafeWithdraw(
 
       // Fetch ALL transactions for the user, then filter client-side. Pure
       // Date comparison via getTime() — no string equality, no timezone tricks.
+      // `vat_rate` is fetched alongside so the engine can split TTC into HT
+      // and the (informational) VAT collected estimate.
       const { data: allTxs, error: txError } = await supabase
         .from("transactions")
-        .select("type, amount, created_at")
+        .select("type, amount, created_at, vat_rate")
         .eq("user_id", userId);
       if (cancelled) return;
 
@@ -116,7 +118,7 @@ export function useSafeWithdraw(
       if (advancedMode) {
         const { data: allExp, error: expError } = await supabase
           .from("expenses")
-          .select("amount, created_at")
+          .select("amount, created_at, vat_rate")
           .eq("user_id", userId);
         if (cancelled) return;
 
@@ -140,12 +142,6 @@ export function useSafeWithdraw(
           transactions: filteredTxs,
           urssafRate: urssaf.urssaf_rate,
           expenses,
-        });
-        // [TEMP DIAG] confirms how many tx/expenses fall into the current period.
-        console.log("[useSafeWithdraw] period counts", {
-          periodStart,
-          txInPeriod: filteredTxs.length,
-          expensesInPeriod: expenses?.length ?? 0,
         });
         setState({ status: "ready", data: result });
       } catch (err) {

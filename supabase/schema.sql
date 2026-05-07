@@ -72,6 +72,12 @@ create table if not exists public.transactions (
 create index if not exists transactions_user_created_idx
   on public.transactions (user_id, created_at desc);
 
+-- Optional VAT (TVA) rate. NULL = no VAT applied (the historical default;
+-- amount is plain HT). Non-null = amount is TTC and HT must be derived.
+alter table public.transactions
+  add column if not exists vat_rate numeric(5,4)
+    check (vat_rate is null or (vat_rate > 0 and vat_rate < 1));
+
 -- =============================================================================
 -- 2bis. expenses
 -- =============================================================================
@@ -89,6 +95,13 @@ create table if not exists public.expenses (
 
 create index if not exists expenses_user_created_idx
   on public.expenses (user_id, created_at desc);
+
+-- Optional recoverable VAT (TVA) rate. Same semantics as `transactions.vat_rate`:
+-- NULL = no VAT (amount is plain HT spend), non-null = amount is TTC and the
+-- engine reduces it to HT for the safe-withdrawal calculation.
+alter table public.expenses
+  add column if not exists vat_rate numeric(5,4)
+    check (vat_rate is null or (vat_rate > 0 and vat_rate < 1));
 
 -- =============================================================================
 -- 3. urssaf_profile

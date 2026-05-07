@@ -80,7 +80,7 @@ export function useSafeWithdrawSeries(
 
       const { data: txs, error: txError } = await supabase
         .from("transactions")
-        .select("type, amount, created_at")
+        .select("type, amount, created_at, vat_rate")
         .eq("user_id", userId);
       if (cancelled) return;
 
@@ -93,7 +93,7 @@ export function useSafeWithdrawSeries(
       if (advancedMode) {
         const { data: expRows, error: expError } = await supabase
           .from("expenses")
-          .select("amount, created_at")
+          .select("amount, created_at, vat_rate")
           .eq("user_id", userId);
         if (cancelled) return;
 

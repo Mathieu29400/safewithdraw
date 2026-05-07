@@ -188,23 +188,18 @@ export default function DashboardPage() {
   const chartEmptyVariant: "current-period" | "all-time" =
     view === "all-time" ? "all-time" : "current-period";
 
-  // Default date the Add dialogs should pre-fill. When the user is
-  // browsing an ARCHIVED period, we want a quick-add to land inside
-  // that period — otherwise the row would slip into today's live
-  // current period instead. We pick the LAST day of the archive (one
-  // millisecond before its exclusive end), formatted as `YYYY-MM-DD`.
-  // For the live current period or the all-time view, we leave it
-  // undefined so the dialog falls back to today.
-  const dialogDefaultDate = useMemo<string | undefined>(() => {
-    if (view !== "period" || selectedPeriod.kind !== "archived") {
-      return undefined;
-    }
-    const lastDay = new Date(new Date(selectedPeriod.endDate).getTime() - 1);
-    const yyyy = lastDay.getUTCFullYear();
-    const mm = String(lastDay.getUTCMonth() + 1).padStart(2, "0");
-    const dd = String(lastDay.getUTCDate()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd}`;
-  }, [view, selectedPeriod]);
+  // Default date the Add dialogs should pre-fill.
+  //
+  // We deliberately keep this `undefined` in every nav state — current
+  // period, archived period, or all-time — so the dialog always falls
+  // back to TODAY. Earlier versions tried to be clever and pre-filled
+  // the last day of an archived period when one was being viewed
+  // ("quick-add inside that period"). In practice users found the
+  // jump-to-end-of-month behaviour surprising: most of the time when
+  // they click "Ajouter du chiffre d'affaires" they want to log
+  // something that just happened. Backfilling old data is still one
+  // click away via the date picker — but it is no longer the default.
+  const dialogDefaultDate: string | undefined = undefined;
 
   const [history, setHistory] = useState<HistoryTransaction[] | null>(null);
   const [expenses, setExpenses] = useState<HistoryExpense[] | null>(null);
@@ -579,7 +574,7 @@ export default function DashboardPage() {
             disabled={!userId}
             className="inline-flex items-center justify-center rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white shadow-[0_8px_24px_-8px_rgba(16,185,129,0.6)] transition duration-200 hover:scale-[1.02] hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:ring-offset-2 focus:ring-offset-slate-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
           >
-            + Ajout de chiffres d’affaires
+            + Ajouter du chiffre d’affaires
           </button>
           <button
             type="button"
@@ -699,6 +694,8 @@ export default function DashboardPage() {
           userId={userId}
           onCreated={refreshHistory}
           defaultDate={dialogDefaultDate}
+          viewedPeriodRange={cardPeriod}
+          viewedPeriodLabel={cardPeriodSubtitle}
         />
       )}
 
@@ -709,6 +706,8 @@ export default function DashboardPage() {
           userId={userId}
           onCreated={refreshExpenses}
           defaultDate={dialogDefaultDate}
+          viewedPeriodRange={cardPeriod}
+          viewedPeriodLabel={cardPeriodSubtitle}
         />
       )}
 
@@ -1351,6 +1350,11 @@ function PreviousPeriodsBody({
 
 function PreviousPeriodRow({ period }: { period: PreviousPeriodSummary }) {
   const { result } = period;
+  // Hide the VAT chips entirely when the bucket has no VAT-flagged data —
+  // beginners on simple invoices keep the original 5-tile look. The
+  // 0.005 epsilon avoids surfacing rounding noise as a "1 cent VAT" tile.
+  const hasIncomeVat = result.vatCollected > 0.005;
+  const hasExpenseVat = result.vatRecoverable > 0.005;
   return (
     <li className="card-soft card-interactive rounded-2xl bg-slate-900/50 p-4 ring-1 ring-white/10 backdrop-blur-xl sm:p-5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -1380,7 +1384,11 @@ function PreviousPeriodRow({ period }: { period: PreviousPeriodSummary }) {
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-5">
-        <PreviousPeriodMetric label="CA" amount={result.ca} tone="positive" />
+        <PreviousPeriodMetric
+          label={hasIncomeVat ? "CA HT" : "CA"}
+          amount={result.ca}
+          tone="positive"
+        />
         <PreviousPeriodMetric
           label="URSSAF"
           amount={result.urssafDue}
@@ -1397,11 +1405,30 @@ function PreviousPeriodRow({ period }: { period: PreviousPeriodSummary }) {
           tone="negative"
         />
         <PreviousPeriodMetric
-          label="Dépenses"
+          label={hasExpenseVat ? "Dépenses HT" : "Dépenses"}
           amount={result.expenses}
           tone="negative"
         />
       </dl>
+
+      {(hasIncomeVat || hasExpenseVat) && (
+        <dl className="mt-3 grid grid-cols-1 gap-x-4 gap-y-2 border-t border-white/5 pt-3 text-xs sm:grid-cols-2">
+          {hasIncomeVat && (
+            <PreviousPeriodMetric
+              label="TVA collectée estimée"
+              amount={result.vatCollected}
+              tone="neutral"
+            />
+          )}
+          {hasExpenseVat && (
+            <PreviousPeriodMetric
+              label="TVA récupérable estimée"
+              amount={result.vatRecoverable}
+              tone="neutral"
+            />
+          )}
+        </dl>
+      )}
     </li>
   );
 }
@@ -1413,10 +1440,15 @@ function PreviousPeriodMetric({
 }: {
   label: string;
   amount: number;
-  tone: "positive" | "negative";
+  tone: "positive" | "negative" | "neutral";
 }) {
-  const valueColor = tone === "positive" ? "text-emerald-400" : "text-rose-400";
-  const sign = tone === "positive" || amount === 0 ? "" : "−";
+  const valueColor =
+    tone === "positive"
+      ? "text-emerald-400"
+      : tone === "negative"
+        ? "text-rose-400"
+        : "text-slate-200";
+  const sign = tone === "negative" && amount !== 0 ? "−" : "";
   return (
     <div className="min-w-0">
       <dt className="text-[10px] uppercase leading-tight tracking-[0.16em] text-slate-500">

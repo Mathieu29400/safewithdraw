@@ -430,24 +430,35 @@ function BreakdownGrid({
   showExpenses: boolean;
   mode: SafeWithdrawMode;
 }) {
+  // Detect whether the user actually invoiced / paid VAT in this view so we
+  // can switch the CA / Dépenses tile labels to "HT" framing and show the
+  // companion VAT tiles. When no VAT was tagged, the tiles fall back to
+  // the historical labels — beginners never see VAT jargon they don't need.
+  const hasIncomeVat = data.vatCollected > 0.005;
+  const hasExpenseVat = showExpenses && data.vatRecoverable > 0.005;
+
   // All-time labels emphasise that the figures are cumulative; period
   // labels stay terse so the hero stays the headline. Same numbers, just
   // a clearer framing per-mode.
   const labels =
     mode === "all-time"
       ? {
-          ca: "CA total",
+          ca: hasIncomeVat ? "CA HT total" : "CA total",
+          vatCollected: "TVA collectée totale (estimée)",
           urssaf: "URSSAF estimée totale",
           reserve: "Réserve de sécurité recommandée (totale)",
           withdrawals: "Retraits totaux",
-          expenses: "Dépenses totales",
+          expenses: hasExpenseVat ? "Dépenses HT totales" : "Dépenses totales",
+          vatRecoverable: "TVA récupérable totale (estimée)",
         }
       : {
-          ca: "Chiffre d'affaires",
+          ca: hasIncomeVat ? "CA HT" : "Chiffre d'affaires",
+          vatCollected: "TVA collectée estimée",
           urssaf: "URSSAF estimée",
           reserve: "Réserve de sécurité recommandée",
           withdrawals: "Déjà retiré",
-          expenses: "Dépenses pro",
+          expenses: hasExpenseVat ? "Dépenses HT" : "Dépenses pro",
+          vatRecoverable: "TVA récupérable estimée",
         };
 
   const reserveHintText =
@@ -492,11 +503,43 @@ function BreakdownGrid({
           />
         )}
       </div>
+
+      {/* VAT row — only rendered when there is actual VAT in this view, so
+          a beginner with no VAT-flagged transactions never sees this jargon.
+          Tiles use a neutral tone on purpose: the recoverable VAT does NOT
+          unlock more withdrawable cash, and the collected VAT is owed
+          back to the tax authority — neither value is a green positive. */}
+      {(hasIncomeVat || hasExpenseVat) && (
+        <div
+          className={`grid gap-3 sm:gap-4 ${
+            hasIncomeVat && hasExpenseVat
+              ? "grid-cols-1 sm:grid-cols-2"
+              : "grid-cols-1"
+          }`}
+        >
+          {hasIncomeVat && (
+            <BreakdownTile
+              label={labels.vatCollected}
+              amount={data.vatCollected}
+              tone="neutral"
+              helperText="Estimation — à reverser à l’administration fiscale."
+            />
+          )}
+          {hasExpenseVat && (
+            <BreakdownTile
+              label={labels.vatRecoverable}
+              amount={data.vatRecoverable}
+              tone="neutral"
+              helperText="Estimation — récupérable auprès de l’administration fiscale."
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-type Tone = "positive" | "negative";
+type Tone = "positive" | "negative" | "neutral";
 
 function BreakdownTile({
   label,
@@ -516,10 +559,22 @@ function BreakdownTile({
   large?: boolean;
 }) {
   const animated = useAnimatedNumber(amount);
+  // Tone palette:
+  //   positive → emerald (CA, safe)
+  //   negative → rose (URSSAF, retraits, dépenses, réserve)
+  //   neutral  → slate (informational figures: VAT collected / recoverable)
+  // The neutral tone is intentionally muted so VAT estimates don't compete
+  // with the actionable green/red signal of the rest of the breakdown.
   const valueColor =
-    tone === "positive" ? "text-emerald-400" : "text-rose-400";
-  // Sign prefix is muted slate so the value colour stays the focus.
-  const signSymbol = tone === "positive" ? "" : "−";
+    tone === "positive"
+      ? "text-emerald-400"
+      : tone === "negative"
+        ? "text-rose-400"
+        : "text-slate-200";
+  // Sign prefix is muted slate so the value colour stays the focus. Neutral
+  // figures never show a sign — they are not adding to or subtracting from
+  // the safe amount.
+  const signSymbol = tone === "negative" ? "−" : "";
 
   const valueSize = large
     ? "text-2xl sm:text-3xl"

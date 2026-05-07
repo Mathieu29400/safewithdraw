@@ -94,25 +94,53 @@ export default function HomePage() {
                 Montant retirable
               </p>
               <p className="mt-2 text-4xl font-semibold tabular-nums text-emerald-200 sm:text-5xl">
-                2 523,20 €
+                2 023,20 €
+              </p>
+              <p className="mt-2 text-xs text-slate-500">
+                Exemple : 9 360 € TTC encaissés (TVA 20 %) et 600 € TTC de dépenses
+                pro (TVA récupérable 20 %).
               </p>
 
-              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <ProofTile label="CA du mois" value="7 800,00 €" tone="positive" />
+              {/* Same tile organisation as the actual dashboard breakdown:
+                  primary row (CA HT, URSSAF, réserve), secondary row
+                  (retraits, dépenses HT) and a VAT row that only appears
+                  when relevant — here it always is because the example
+                  carries VAT on both incomes and expenses. */}
+              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <ProofTile label="CA HT" value="7 800,00 €" tone="positive" />
                 <ProofTile
-                  label="URSSAF freelance (25,6 %)"
+                  label="URSSAF estimée (25,6 %)"
                   value="−1 996,80 €"
                   tone="negative"
                 />
                 <ProofTile
-                  label="Réserve de sécurité (10 %)"
+                  label="Réserve de sécurité recommandée (10 %)"
                   value="−780,00 €"
                   tone="negative"
                 />
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3">
                 <ProofTile
-                  label="Argent déjà retiré"
+                  label="Déjà retiré"
                   value="−2 500,00 €"
                   tone="negative"
+                />
+                <ProofTile
+                  label="Dépenses HT"
+                  value="−500,00 €"
+                  tone="negative"
+                />
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <ProofTile
+                  label="TVA collectée estimée"
+                  value="1 560,00 €"
+                  tone="neutral"
+                />
+                <ProofTile
+                  label="TVA récupérable estimée"
+                  value="100,00 €"
+                  tone="neutral"
                 />
               </div>
 
@@ -130,9 +158,13 @@ export default function HomePage() {
                       <stop offset="100%" stopColor="#34d399" stopOpacity="0" />
                     </linearGradient>
                   </defs>
-                  {/* Axes labels like dashboard preview */} 
-                  <text x="8" y="36" fill="#64748b" fontSize="11">3k €</text>
-                  <text x="8" y="95" fill="#64748b" fontSize="11">2k €</text>
+                  {/* Y-axis rescaled to the new safe-withdrawable range
+                      (~2 k € peak) so the curve reads in line with the
+                      hero number above. The grid lines stay where they
+                      were; only the labels and the path's vertical
+                      amplitude are tuned. */}
+                  <text x="8" y="36" fill="#64748b" fontSize="11">2k €</text>
+                  <text x="8" y="95" fill="#64748b" fontSize="11">1,5k €</text>
                   <text x="8" y="154" fill="#64748b" fontSize="11">1k €</text>
                   <line x1="52" y1="30" x2="585" y2="30" stroke="#334155" strokeWidth="1" strokeDasharray="3 4" />
                   <line x1="52" y1="90" x2="585" y2="90" stroke="#334155" strokeWidth="1" strokeDasharray="3 4" />
@@ -156,8 +188,10 @@ export default function HomePage() {
               </div>
             </div>
             <p className="mt-4 text-center text-xs text-slate-500">
-              Exemple pour un freelance avec un taux URSSAF de 25,6 %. Le calcul
-              automatique fonctionne aussi avec tous les autres taux URSSAF existants.
+              Exemple pour un freelance avec un taux URSSAF de 25,6 % et de la TVA
+              à 20 % sur le CA et les dépenses pro. Le calcul automatique
+              fonctionne aussi avec les autres taux URSSAF (12,3 %, 21,2 %, 23,2 %…)
+              et de TVA (10 %, 5,5 %), ou sans TVA si tu n’es pas redevable.
             </p>
           </div>
         </section>
@@ -339,9 +373,21 @@ function ProofTile({
 }: {
   label: string;
   value: string;
-  tone: "positive" | "negative";
+  /**
+   * Same tone palette as the in-app `BreakdownTile`:
+   *   positive → emerald (CA HT, montant retirable)
+   *   negative → rose    (URSSAF, réserve, retraits, dépenses HT)
+   *   neutral  → slate   (TVA collectée / récupérable estimées — purely
+   *                       informational, not added/subtracted from safe).
+   */
+  tone: "positive" | "negative" | "neutral";
 }) {
-  const valueColor = tone === "positive" ? "text-emerald-300" : "text-rose-300";
+  const valueColor =
+    tone === "positive"
+      ? "text-emerald-300"
+      : tone === "negative"
+        ? "text-rose-300"
+        : "text-slate-200";
 
   return (
     <div className="rounded-lg bg-white/[0.03] p-3 ring-1 ring-white/10">

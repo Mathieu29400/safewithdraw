@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { supabase } from "@/lib/supabase";
 
@@ -14,14 +14,48 @@ type Props = {
   /** Called after a successful insert. Lets the parent refresh its list. */
   onCreated?: () => void;
   /**
-   * Optional `YYYY-MM-DD` pre-fill for the date picker. The dashboard
-   * passes the LAST day of an archived period when one is being viewed,
-   * so a quick-add lands inside that period instead of leaking into
-   * today's live current period.
-   * When omitted, falls back to today's local date.
+   * Optional `YYYY-MM-DD` pre-fill for the date picker. When omitted, falls
+   * back to today's local date. We deliberately default to today even when
+   * the user is browsing an archived period — see the comment in the
+   * dashboard's `dialogDefaultDate` for the rationale.
    */
   defaultDate?: string;
+  /**
+   * The URSSAF period the user is currently CONSULTING in the dashboard,
+   * if any. Used purely as a safety net: if the entered date falls outside
+   * this window, the dialog asks the user to confirm before persisting —
+   * because clicking "Ajouter du chiffre d'affaires" while looking at the
+   * March archive but submitting with a May date is almost always a slip.
+   *
+   * Pass `undefined` for the all-time view (no period scoping → no
+   * mismatch is ever possible). For the live current period, pass `{start}`
+   * with no `end` (the period has no upper bound). For an archived period,
+   * pass both bounds.
+   */
+  viewedPeriodRange?: { start: string; end?: string };
+  /**
+   * Human-readable label of the viewed period, used in the confirmation
+   * banner ("Tu consultes la période [mars 2026]…"). When absent, the
+   * banner falls back to a generic "cette période" wording.
+   */
+  viewedPeriodLabel?: string;
 };
+
+/**
+ * VAT presets we offer to the user. We deliberately keep the list short to
+ * the three rates that cover virtually every micro-entrepreneur invoice in
+ * France (standard, intermediate, reduced). The default is 20 % because that
+ * is by far the most common.
+ *
+ * Stored as decimals with 4 decimal precision so 5.5 % is exact (0.0550).
+ */
+const VAT_PRESETS = [
+  { label: "20 %", value: 0.2 },
+  { label: "10 %", value: 0.1 },
+  { label: "5,5 %", value: 0.055 },
+] as const;
+
+const DEFAULT_VAT_RATE = 0.2;
 
 /**
  * Quick-entry modal for transactions. Uses the native <dialog> element
@@ -29,6 +63,11 @@ type Props = {
  *
  * The user can pick any past date — this is by design, freelancers need to
  * backfill data from before they signed up.
+ *
+ * Income rows can also be tagged with a VAT (TVA) rate. When the user ticks
+ * "J'ai facturé de la TVA", the entered amount is interpreted as TTC and
+ * the engine derives HT via `HT = TTC / (1 + rate)`. Withdrawals never
+ * accept VAT — the input is only rendered for incomes.
  */
 export function AddTransactionDialog({
   type,
@@ -37,12 +76,28 @@ export function AddTransactionDialog({
   userId,
   onCreated,
   defaultDate,
+  viewedPeriodRange,
+  viewedPeriodLabel,
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState<string>(() => defaultDate ?? todayLocalIso());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // VAT toggle + rate. Only meaningful for incomes; reset to "off / 20 %"
+  // every time the dialog opens so the user starts from a known baseline.
+  const [vatEnabled, setVatEnabled] = useState(false);
+  const [vatRate, setVatRate] = useState<number>(DEFAULT_VAT_RATE);
+
+  // Two-step submit guard for period mismatches. Flips to `true` the FIRST
+  // time the user submits with a date outside the viewed period; the
+  // second click on the (now relabelled) confirm button performs the
+  // actual insert. Reset every time the user touches the date input so a
+  // correction immediately undoes the warning state.
+  const [confirmingOutsidePeriod, setConfirmingOutsidePeriod] = useState(false);
+
+  const isIncome = type === "income";
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -61,6 +116,34 @@ export function AddTransactionDialog({
 
   const handleBackdropClick = (e: React.MouseEvent<HTMLDialogElement>) => {
     if (e.target === dialogRef.current) handleClose();
+  };
+
+  // Live HT / VAT preview shown under the input. Only computed when VAT
+  // is on AND the amount is a valid positive number — otherwise we leave
+  // the preview area empty (the helper text still explains what will
+  // happen). Memoised so re-renders from the date input don't recompute.
+  const ttcParsed = useMemo(() => parseAmount(amount), [amount]);
+  const vatPreview = useMemo(() => {
+    if (!isIncome || !vatEnabled || ttcParsed === null) return null;
+    const ht = ttcParsed / (1 + vatRate);
+    return { ht, vat: ttcParsed - ht };
+  }, [isIncome, vatEnabled, ttcParsed, vatRate]);
+
+  // Pre-compute whether the currently-typed date falls outside the period
+  // the user is consulting. We use this in the JSX to render the warning
+  // banner BEFORE the user even submits — so the slip is visible while
+  // they're still looking at the form, not just after a click.
+  const dateOutsidePeriod = useMemo(
+    () => isDateOutsidePeriod(date, viewedPeriodRange),
+    [date, viewedPeriodRange],
+  );
+
+  // Reset the confirm gate the moment the user touches the date. Without
+  // this, fixing the date would still leave the "Confirmer quand même"
+  // button label active until the next submit — confusing.
+  const handleDateChange = (next: string) => {
+    setDate(next);
+    setConfirmingOutsidePeriod(false);
   };
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
@@ -86,12 +169,27 @@ export function AddTransactionDialog({
       return;
     }
 
+    // Period-mismatch guard. If the entered date is outside the period the
+    // user is consulting AND they haven't acknowledged it yet, swap the
+    // submit button into "Confirmer quand même" mode and bail out. The
+    // second click (with `confirmingOutsidePeriod` already true) goes
+    // through to the actual insert.
+    if (dateOutsidePeriod && !confirmingOutsidePeriod) {
+      setConfirmingOutsidePeriod(true);
+      return;
+    }
+
     setSubmitting(true);
+    // Persist `vat_rate` only when the checkbox is on AND the row is an
+    // income — the column is nullable and `null` means "no VAT". This
+    // keeps existing data semantically identical to the new world.
+    const persistedVatRate = isIncome && vatEnabled ? vatRate : null;
     const { error: insertError } = await supabase.from("transactions").insert({
       user_id: userId,
       type,
       amount: parsedAmount,
       created_at: isoDate,
+      vat_rate: persistedVatRate,
     });
 
     if (insertError) {
@@ -104,14 +202,18 @@ export function AddTransactionDialog({
     onOpenChange(false);
   };
 
-  const isIncome = type === "income";
-  const title = isIncome ? "Ajouter une entrée" : "Ajouter un retrait";
+  const title = isIncome ? "Ajouter du chiffre d’affaires" : "Ajouter un retrait";
   const submitLabel = isIncome
     ? "Enregistrer l’entrée"
     : "Enregistrer le retrait";
   const submitClass = isIncome
     ? "bg-emerald-500 hover:bg-emerald-400 shadow-[0_8px_24px_-8px_rgba(16,185,129,0.6)]"
     : "bg-white/10 hover:bg-white/15 ring-1 ring-white/10";
+
+  // Income rows are TTC by default in the new spec — always TTC labelled,
+  // even when the VAT checkbox is off (in which case TTC === HT). Withdrawals
+  // keep the simple "Montant" label since VAT does not apply.
+  const amountLabel = isIncome ? "Montant encaissé TTC (€)" : "Montant (€)";
 
   return (
     <dialog
@@ -140,7 +242,7 @@ export function AddTransactionDialog({
             htmlFor="amount"
             className="block text-sm font-medium text-slate-300"
           >
-            Montant (€)
+            {amountLabel}
           </label>
           <input
             id="amount"
@@ -157,6 +259,76 @@ export function AddTransactionDialog({
           />
         </div>
 
+        {/* VAT block — incomes only. The checkbox is muted by default so a
+            first-time freelancer who is not VAT-liable doesn't get distracted. */}
+        {isIncome && (
+          <div className="space-y-3 rounded-xl border border-white/5 bg-white/[0.02] p-3.5">
+            <label
+              htmlFor="vat-enabled"
+              className="flex cursor-pointer items-start gap-3 text-sm text-slate-200"
+            >
+              <input
+                id="vat-enabled"
+                type="checkbox"
+                checked={vatEnabled}
+                onChange={(e) => setVatEnabled(e.target.checked)}
+                className="mt-0.5 h-4 w-4 cursor-pointer rounded border-white/20 bg-white/5 text-emerald-500 accent-emerald-500 focus:ring-2 focus:ring-emerald-500/40"
+              />
+              <span>
+                <span className="font-medium text-slate-100">
+                  J’ai facturé de la TVA
+                </span>
+                <span className="mt-0.5 block text-xs text-slate-500">
+                  Le montant HT est calculé automatiquement.
+                </span>
+              </span>
+            </label>
+
+            {vatEnabled && (
+              <div className="space-y-3 pl-7">
+                <div>
+                  <span className="block text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
+                    Taux de TVA
+                  </span>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {VAT_PRESETS.map((preset) => {
+                      const active = Math.abs(vatRate - preset.value) < 1e-6;
+                      return (
+                        <button
+                          key={preset.value}
+                          type="button"
+                          onClick={() => setVatRate(preset.value)}
+                          aria-pressed={active}
+                          className={`inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-sm font-medium ring-1 transition focus:outline-none focus:ring-2 focus:ring-emerald-500/40 ${
+                            active
+                              ? "bg-emerald-500/15 text-emerald-200 ring-emerald-500/40"
+                              : "bg-white/[0.04] text-slate-300 ring-white/10 hover:bg-white/10 hover:text-slate-100"
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {vatPreview && (
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-lg bg-slate-900/40 px-3 py-2.5 text-xs ring-1 ring-white/5">
+                    <dt className="text-slate-500">Montant HT</dt>
+                    <dd className="text-right font-mono tabular-nums text-emerald-300">
+                      {formatEuroPreview(vatPreview.ht)}
+                    </dd>
+                    <dt className="text-slate-500">TVA collectée estimée</dt>
+                    <dd className="text-right font-mono tabular-nums text-slate-300">
+                      {formatEuroPreview(vatPreview.vat)}
+                    </dd>
+                  </dl>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         <div>
           <label
             htmlFor="date"
@@ -170,7 +342,7 @@ export function AddTransactionDialog({
             required
             value={date}
             max={todayLocalIso()}
-            onChange={(e) => setDate(e.target.value)}
+            onChange={(e) => handleDateChange(e.target.value)}
             className="mt-1.5 block w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-100 shadow-sm focus:border-emerald-500/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 [color-scheme:dark]"
           />
           <p className="mt-1.5 text-xs text-slate-500">
@@ -178,13 +350,35 @@ export function AddTransactionDialog({
           </p>
         </div>
 
+        {/* Period mismatch warning. Rendered ABOVE the buttons so the user
+            sees the mismatch as soon as they pick a date outside the
+            consulted period — they don't have to click submit first. The
+            actual submit blocking happens in handleSubmit; this banner is
+            purely the visual cue. */}
+        {dateOutsidePeriod && (
+          <div
+            role="alert"
+            className="space-y-1 rounded-lg border border-amber-500/30 bg-amber-950/40 px-3 py-2.5 text-sm text-amber-100"
+          >
+            <p className="font-medium">
+              Cette {isIncome ? "entrée" : "sortie"} ne tombe pas dans la
+              période que tu consultes.
+            </p>
+            <p className="text-xs text-amber-200/80">
+              {viewedPeriodLabel
+                ? `Tu regardes ${viewedPeriodLabel.toLowerCase()}, mais la date choisie est le ${formatLongDate(date)}. Elle sera enregistrée dans la période URSSAF correspondant à cette date.`
+                : `La date choisie (${formatLongDate(date)}) ne correspond pas à la période actuellement affichée. Elle sera enregistrée dans la période URSSAF correspondant à cette date.`}
+            </p>
+          </div>
+        )}
+
         {error && (
           <div className="rounded-lg border border-rose-500/30 bg-rose-950/50 px-3 py-2 text-sm text-rose-200">
             {error}
           </div>
         )}
 
-        <div className="flex justify-end gap-3">
+        <div className="flex flex-wrap justify-end gap-3">
           <button
             type="button"
             onClick={handleClose}
@@ -196,9 +390,17 @@ export function AddTransactionDialog({
           <button
             type="submit"
             disabled={submitting}
-            className={`inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${submitClass}`}
+            className={`inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+              dateOutsidePeriod && confirmingOutsidePeriod
+                ? "bg-amber-500 hover:bg-amber-400 shadow-[0_8px_24px_-8px_rgba(245,158,11,0.55)]"
+                : submitClass
+            }`}
           >
-            {submitting ? "Enregistrement…" : submitLabel}
+            {submitting
+              ? "Enregistrement…"
+              : dateOutsidePeriod && confirmingOutsidePeriod
+                ? "Confirmer quand même"
+                : submitLabel}
           </button>
         </div>
       </form>
@@ -234,4 +436,55 @@ function parseAmount(input: string): number | null {
   const n = Number(cleaned);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(n * 100) / 100;
+}
+
+function formatEuroPreview(amount: number): string {
+  return amount.toLocaleString("fr-FR", {
+    style: "currency",
+    currency: "EUR",
+  });
+}
+
+/**
+ * Returns true when the entered date falls outside the period the user
+ * is consulting. Both bounds matter:
+ *   - earlier than `start` (inclusive lower bound) → outside
+ *   - on/after `end` when defined (exclusive upper bound) → outside
+ *
+ * The date is anchored at noon UTC to dodge timezone edge-cases that
+ * could push a `YYYY-MM-DD` input over the boundary by a few hours.
+ *
+ * Returns false when no period is provided (all-time view) or the
+ * input is not a valid YYYY-MM-DD string.
+ */
+function isDateOutsidePeriod(
+  ymd: string,
+  range: { start: string; end?: string } | undefined,
+): boolean {
+  if (!range) return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!match) return false;
+  const [, y, m, d] = match;
+  const ts = Date.UTC(Number(y), Number(m) - 1, Number(d), 12);
+  const startMs = new Date(range.start).getTime();
+  if (ts < startMs) return true;
+  if (range.end !== undefined) {
+    const endMs = new Date(range.end).getTime();
+    if (ts >= endMs) return true;
+  }
+  return false;
+}
+
+/** Long-form French date — "7 mai 2026". Used in the period-mismatch banner. */
+function formatLongDate(ymd: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!match) return ymd;
+  const [, y, m, d] = match;
+  const date = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d), 12));
+  return date.toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 }

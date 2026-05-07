@@ -203,7 +203,7 @@ export function usePreviousPeriods(
       //    them in memory for each bucket.
       const { data: txData, error: txError } = await supabase
         .from("transactions")
-        .select("type, amount, created_at")
+        .select("type, amount, created_at, vat_rate")
         .eq("user_id", userId);
       if (cancelled) return;
 
@@ -217,7 +217,7 @@ export function usePreviousPeriods(
       if (advancedMode) {
         const { data: expData, error: expError } = await supabase
           .from("expenses")
-          .select("amount, created_at")
+          .select("amount, created_at, vat_rate")
           .eq("user_id", userId);
         if (cancelled) return;
 

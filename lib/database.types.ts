@@ -64,6 +64,12 @@ export type Database = {
           amount: number;
           description: string | null;
           created_at: string;
+          /**
+           * Decimal VAT rate (e.g. 0.2000 for 20 %). `null` means the user
+           * did not flag this expense as recoverable VAT — `amount` is then
+           * a plain HT spend with no VAT split.
+           */
+          vat_rate: number | null;
         };
         Insert: {
           id?: string;
@@ -71,6 +77,7 @@ export type Database = {
           amount: number;
           description?: string | null;
           created_at?: string;
+          vat_rate?: number | null;
         };
         Update: {
           id?: string;
@@ -78,6 +85,7 @@ export type Database = {
           amount?: number;
           description?: string | null;
           created_at?: string;
+          vat_rate?: number | null;
         };
         Relationships: [
           {
@@ -95,6 +103,13 @@ export type Database = {
           type: TransactionType;
           amount: number;
           created_at: string;
+          /**
+           * Decimal VAT rate applied on income rows (e.g. 0.2000 for 20 %).
+           * `null` means the user did not invoice VAT — `amount` is then
+           * plain net revenue (HT === TTC). Always `null` for withdrawals;
+           * the engine ignores the column on that branch.
+           */
+          vat_rate: number | null;
         };
         Insert: {
           id?: string;
@@ -102,6 +117,7 @@ export type Database = {
           type: TransactionType;
           amount: number;
           created_at?: string;
+          vat_rate?: number | null;
         };
         Update: {
           id?: string;
@@ -109,6 +125,7 @@ export type Database = {
           type?: TransactionType;
           amount?: number;
           created_at?: string;
+          vat_rate?: number | null;
         };
         Relationships: [
           {

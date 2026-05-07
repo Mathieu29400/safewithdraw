@@ -11,16 +11,24 @@ import {
 
 const PERIOD_START = "2026-04-01T00:00:00Z";
 
-function income(amount: number | string, at = "2026-04-15T10:00:00Z"): CashflowTransaction {
-  return { type: "income", amount, created_at: at };
+function income(
+  amount: number | string,
+  at = "2026-04-15T10:00:00Z",
+  vat_rate?: number | string | null,
+): CashflowTransaction {
+  return { type: "income", amount, created_at: at, vat_rate };
 }
 
 function withdrawal(amount: number | string, at = "2026-04-15T10:00:00Z"): CashflowTransaction {
   return { type: "withdrawal", amount, created_at: at };
 }
 
-function expense(amount: number | string, at = "2026-04-15T10:00:00Z"): CashflowExpense {
-  return { amount, created_at: at };
+function expense(
+  amount: number | string,
+  at = "2026-04-15T10:00:00Z",
+  vat_rate?: number | string | null,
+): CashflowExpense {
+  return { amount, created_at: at, vat_rate };
 }
 
 describe("SECURITY_RESERVE_RATE", () => {
@@ -47,10 +55,12 @@ describe("computeSafeWithdraw — empty / no-op", () => {
       }),
     ).toEqual({
       ca: 0,
+      vatCollected: 0,
       urssafDue: 0,
       reserve: 0,
       withdrawals: 0,
       expenses: 0,
+      vatRecoverable: 0,
       safe: 0,
     });
   });
@@ -66,10 +76,12 @@ describe("computeSafeWithdraw — formula", () => {
     // CA=1000, urssaf=218, reserve=100, withdrawals=0 → safe=682
     expect(r).toEqual({
       ca: 1000,
+      vatCollected: 0,
       urssafDue: 218,
       reserve: 100,
       withdrawals: 0,
       expenses: 0,
+      vatRecoverable: 0,
       safe: 682,
     });
   });
@@ -109,12 +121,203 @@ describe("computeSafeWithdraw — formula", () => {
     // CA=1000, urssaf=220, reserve=100, withdrawals=100 → safe=580
     expect(r).toEqual({
       ca: 1000,
+      vatCollected: 0,
       urssafDue: 220,
       reserve: 100,
       withdrawals: 100,
       expenses: 0,
+      vatRecoverable: 0,
       safe: 580,
     });
+  });
+});
+
+describe("computeSafeWithdraw — VAT (TVA)", () => {
+  // Spec invariants:
+  //   - HT = TTC / (1 + vat_rate). NEVER `TTC * (1 - rate)`.
+  //   - The safe-withdrawal formula consumes HT, never TTC.
+  //   - VAT collected/recoverable is INFORMATIVE: it must NOT change `safe`.
+  //   - Missing / null / 0 / out-of-range vat_rate ⇒ row treated as plain HT.
+
+  it("splits 1200 € TTC at 20 % into 1000 € HT + 200 € TVA (canonical example)", () => {
+    const r = computeSafeWithdraw({
+      transactions: [income(1200, "2026-04-15T10:00:00Z", 0.2)],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+    });
+    expect(r.ca).toBe(1000);
+    expect(r.vatCollected).toBe(200);
+  });
+
+  it("splits 100 € TTC at 20 % into 83.33 € HT + 16.67 € TVA", () => {
+    const r = computeSafeWithdraw({
+      transactions: [income(100, "2026-04-15T10:00:00Z", 0.2)],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+    });
+    expect(r.ca).toBe(83.33);
+    expect(r.vatCollected).toBe(16.67);
+  });
+
+  it("uses TTC / (1 + rate) — NOT TTC × (1 − rate)", () => {
+    // The wrong formula would yield 1200 * 0.8 = 960, off by 40 €.
+    // The correct formula yields 1000 (1200 / 1.2). Pin it explicitly so
+    // a future "simplification" can't quietly regress this rule.
+    const r = computeSafeWithdraw({
+      transactions: [income(1200, "2026-04-15T10:00:00Z", 0.2)],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+    });
+    expect(r.ca).not.toBe(960);
+    expect(r.ca).toBe(1000);
+  });
+
+  it("URSSAF + reserve are computed off CA HT, not TTC", () => {
+    const r = computeSafeWithdraw({
+      transactions: [income(1200, "2026-04-15T10:00:00Z", 0.2)],
+      urssafRate: 0.22,
+      periodStart: PERIOD_START,
+    });
+    // CA HT = 1000 (not 1200). URSSAF = 220, reserve = 100, safe = 680.
+    expect(r.ca).toBe(1000);
+    expect(r.urssafDue).toBe(220);
+    expect(r.reserve).toBe(100);
+    expect(r.safe).toBe(680);
+  });
+
+  it("supports the 10 % and 5.5 % presets", () => {
+    const r10 = computeSafeWithdraw({
+      transactions: [income(110, "2026-04-15T10:00:00Z", 0.1)],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+    });
+    expect(r10.ca).toBe(100);
+    expect(r10.vatCollected).toBe(10);
+
+    const r55 = computeSafeWithdraw({
+      transactions: [income(105.5, "2026-04-15T10:00:00Z", 0.055)],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+    });
+    expect(r55.ca).toBe(100);
+    expect(r55.vatCollected).toBe(5.5);
+  });
+
+  it("treats null / undefined / 0 vat_rate as 'no VAT'", () => {
+    const r = computeSafeWithdraw({
+      transactions: [
+        income(100, "2026-04-15T10:00:00Z", null),
+        income(100, "2026-04-15T10:00:00Z", undefined),
+        income(100, "2026-04-15T10:00:00Z", 0),
+      ],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+    });
+    expect(r.ca).toBe(300);
+    expect(r.vatCollected).toBe(0);
+  });
+
+  it("ignores withdrawals' vat_rate (withdrawals are personal cash movements)", () => {
+    // A withdrawal row is not an invoice: even if a corrupt client sneaks
+    // a vat_rate in, the engine must treat the amount as a flat negative.
+    const r = computeSafeWithdraw({
+      transactions: [
+        income(1000),
+        { type: "withdrawal", amount: 200, created_at: "2026-04-15T10:00:00Z", vat_rate: 0.2 },
+      ],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+    });
+    expect(r.withdrawals).toBe(200);
+  });
+
+  it("mixes VAT and non-VAT incomes correctly", () => {
+    const r = computeSafeWithdraw({
+      transactions: [
+        income(120, "2026-04-15T10:00:00Z", 0.2), // 100 HT + 20 TVA
+        income(100, "2026-04-15T10:00:00Z"), // plain 100 HT
+      ],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+    });
+    expect(r.ca).toBe(200);
+    expect(r.vatCollected).toBe(20);
+  });
+
+  it("accepts string vat_rate (postgrest numeric column)", () => {
+    const r = computeSafeWithdraw({
+      transactions: [income(1200, "2026-04-15T10:00:00Z", "0.2000")],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+    });
+    expect(r.ca).toBe(1000);
+    expect(r.vatCollected).toBe(200);
+  });
+
+  it("filters VAT-tagged incomes by period bounds", () => {
+    const r = computeSafeWithdraw({
+      transactions: [
+        income(1200, "2026-03-31T23:59:59Z", 0.2), // before period — excluded
+        income(120, "2026-04-15T10:00:00Z", 0.2), // included → 100 HT + 20 TVA
+      ],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+      periodEnd: "2026-05-01T00:00:00Z",
+    });
+    expect(r.ca).toBe(100);
+    expect(r.vatCollected).toBe(20);
+  });
+
+  it("splits VAT on expenses into HT spend + recoverable VAT", () => {
+    const r = computeSafeWithdraw({
+      transactions: [income(1000)],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+      expenses: [expense(120, "2026-04-15T10:00:00Z", 0.2)],
+    });
+    // Expense HT = 100, recoverable = 20.
+    expect(r.expenses).toBe(100);
+    expect(r.vatRecoverable).toBe(20);
+    // Safe must use HT expense, not TTC: 1000 - 100 (reserve) - 100 (HT expense) = 800.
+    expect(r.safe).toBe(800);
+  });
+
+  it("recoverable VAT does NOT enter the safe-withdrawal formula", () => {
+    // Two scenarios with the same TTC expense — one VAT-flagged, one not.
+    // The flagged scenario should yield a HIGHER `safe` because only HT
+    // counts as a real expense, AND `vatRecoverable` must not feed back
+    // into safe (otherwise we'd double-count it as if it were income).
+    const noVat = computeSafeWithdraw({
+      transactions: [income(1000)],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+      expenses: [expense(120)],
+    });
+    const withVat = computeSafeWithdraw({
+      transactions: [income(1000)],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+      expenses: [expense(120, "2026-04-15T10:00:00Z", 0.2)],
+    });
+    expect(noVat.safe).toBe(780); // 1000 - 100 - 120
+    expect(withVat.safe).toBe(800); // 1000 - 100 - 100 (HT only)
+    // vatRecoverable is informational, not added back to safe.
+    expect(withVat.vatRecoverable).toBe(20);
+  });
+
+  it("ignores out-of-range / non-finite vat_rate defensively", () => {
+    const r = computeSafeWithdraw({
+      transactions: [
+        income(120, "2026-04-15T10:00:00Z", 1.5), // > 1 → ignored
+        income(120, "2026-04-15T10:00:00Z", -0.2), // < 0 → ignored
+        income(120, "2026-04-15T10:00:00Z", "abc"), // non-finite → ignored
+      ],
+      urssafRate: 0,
+      periodStart: PERIOD_START,
+    });
+    // Each of the three rows is treated as a plain 120 HT income.
+    expect(r.ca).toBe(360);
+    expect(r.vatCollected).toBe(0);
   });
 });
 
@@ -596,5 +799,17 @@ describe("computeSafeWithdrawSeries", () => {
     });
     expect(points).toHaveLength(1);
     expect(points[0].ca).toBe(300);
+  });
+
+  it("aggregates VAT-tagged incomes as HT for the chart series", () => {
+    // The chart should show CA HT progression so it stays consistent with
+    // the hero KPI. A 1200 € TTC invoice at 20 % must register as 1000 €
+    // CA on the series — never 1200.
+    const points = computeSafeWithdrawSeries({
+      transactions: [income(1200, "2026-04-01T10:00:00Z", 0.2)],
+      urssafRate: 0,
+    });
+    expect(points[0].ca).toBe(1000);
+    expect(points[0].safe).toBe(900); // 1000 − reserve(100)
   });
 });
