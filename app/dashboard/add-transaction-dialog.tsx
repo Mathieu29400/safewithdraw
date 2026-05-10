@@ -318,7 +318,7 @@ export function AddTransactionDialog({
                     <dd className="text-right font-mono tabular-nums text-emerald-300">
                       {formatEuroPreview(vatPreview.ht)}
                     </dd>
-                    <dt className="text-slate-500">TVA collectée estimée</dt>
+                    <dt className="text-slate-500">TVA à reverser estimée</dt>
                     <dd className="text-right font-mono tabular-nums text-slate-300">
                       {formatEuroPreview(vatPreview.vat)}
                     </dd>

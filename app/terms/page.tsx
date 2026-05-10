@@ -21,10 +21,10 @@ export default function TermsPage() {
         <p>
           L&apos;éditeur du service est SafeWithdraw, joignable à l&apos;adresse{" "}
           <a
-            href="mailto:hello@safewithdraw.app"
+            href="mailto:safewithdraw.contact@gmail.com"
             className="text-emerald-400 hover:underline"
           >
-            hello@safewithdraw.app
+            safewithdraw.contact@gmail.com
           </a>
           .
         </p>
@@ -105,10 +105,10 @@ export default function TermsPage() {
           Pour toute question relative aux présentes conditions, vous pouvez
           nous contacter à{" "}
           <a
-            href="mailto:hello@safewithdraw.app"
+            href="mailto:safewithdraw.contact@gmail.com"
             className="text-emerald-400 hover:underline"
           >
-            hello@safewithdraw.app
+            safewithdraw.contact@gmail.com
           </a>
           .
         </p>

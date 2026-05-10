@@ -70,6 +70,13 @@ export type Database = {
            * a plain HT spend with no VAT split.
            */
           vat_rate: number | null;
+          /**
+           * Foreign key to the recurring template that produced this row,
+           * if any. `null` means this is a one-off (manually entered)
+           * expense; non-null means it was materialized by the
+           * `recurring_expenses` triggers.
+           */
+          recurring_expense_id: string | null;
         };
         Insert: {
           id?: string;
@@ -78,6 +85,7 @@ export type Database = {
           description?: string | null;
           created_at?: string;
           vat_rate?: number | null;
+          recurring_expense_id?: string | null;
         };
         Update: {
           id?: string;
@@ -86,10 +94,53 @@ export type Database = {
           description?: string | null;
           created_at?: string;
           vat_rate?: number | null;
+          recurring_expense_id?: string | null;
         };
         Relationships: [
           {
             foreignKeyName: "expenses_user_id_fkey";
+            columns: ["user_id"];
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "expenses_recurring_expense_id_fkey";
+            columns: ["recurring_expense_id"];
+            referencedRelation: "recurring_expenses";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      recurring_expenses: {
+        Row: {
+          id: string;
+          user_id: string;
+          /** Monthly amount. Trigger multiplies by 3 on quarterly periods. */
+          amount: number;
+          description: string | null;
+          /** Same semantics as `expenses.vat_rate`. */
+          vat_rate: number | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          amount: number;
+          description?: string | null;
+          vat_rate?: number | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          amount?: number;
+          description?: string | null;
+          vat_rate?: number | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "recurring_expenses_user_id_fkey";
             columns: ["user_id"];
             referencedRelation: "profiles";
             referencedColumns: ["id"];
@@ -205,5 +256,7 @@ export type Database = {
 export type Profile = Database["public"]["Tables"]["profiles"]["Row"];
 export type Transaction = Database["public"]["Tables"]["transactions"]["Row"];
 export type Expense = Database["public"]["Tables"]["expenses"]["Row"];
+export type RecurringExpense =
+  Database["public"]["Tables"]["recurring_expenses"]["Row"];
 export type UrssafProfile = Database["public"]["Tables"]["urssaf_profile"]["Row"];
 export type Period = Database["public"]["Tables"]["periods"]["Row"];

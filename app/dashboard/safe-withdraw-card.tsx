@@ -89,6 +89,15 @@ type Props = {
    * `isCurrentPeriod` is true.
    */
   periodType?: PeriodType;
+  /**
+   * Sum of every recurring template's monthly TTC amount, regardless
+   * of period. When > 0 in advanced mode, the "Dépenses pro" tile
+   * surfaces it as a small amber sub-line ("X €/mois récurrent") so
+   * the user can spot at a glance how much is locked into recurring
+   * commitments separately from the period total. Pass 0 / undefined
+   * when there is no recurring template.
+   */
+  recurringMonthlyTotal?: number;
 };
 
 export function SafeWithdrawCard({
@@ -99,6 +108,7 @@ export function SafeWithdrawCard({
   isCurrentPeriod = true,
   periodSubtitle,
   periodType,
+  recurringMonthlyTotal,
 }: Props) {
   // In "period" mode, hold the hook in loading until the period resolves so
   // we never flash all-time data inside the period KPI. In "all-time" mode
@@ -130,7 +140,12 @@ export function SafeWithdrawCard({
     <section className="space-y-6">
       <HeroCard data={data} isOverdrawn={isOverdrawn} mode={mode} periodSubtitle={periodSubtitle} />
       {isPeriod && isCurrentPeriod && isOverdrawn && <OverdrawAlert />}
-      <BreakdownGrid data={data} showExpenses={showExpenses} mode={mode} />
+      <BreakdownGrid
+        data={data}
+        showExpenses={showExpenses}
+        mode={mode}
+        recurringMonthlyTotal={recurringMonthlyTotal}
+      />
       {isPeriod && isCurrentPeriod && period && periodType && (
         <ProjectionBanner data={data} period={period} periodType={periodType} />
       )}
@@ -425,15 +440,22 @@ function BreakdownGrid({
   data,
   showExpenses,
   mode,
+  recurringMonthlyTotal,
 }: {
   data: CashflowResult;
   showExpenses: boolean;
   mode: SafeWithdrawMode;
+  /**
+   * Total monthly TTC of recurring templates. Surfaced as an amber
+   * sub-line on the "Dépenses pro" tile when > 0; ignored otherwise.
+   */
+  recurringMonthlyTotal?: number;
 }) {
-  // Detect whether the user actually invoiced / paid VAT in this view so we
-  // can switch the CA / Dépenses tile labels to "HT" framing and show the
-  // companion VAT tiles. When no VAT was tagged, the tiles fall back to
-  // the historical labels — beginners never see VAT jargon they don't need.
+  // Detect whether the user actually invoiced / paid VAT in this view.
+  // Income still switches to a "CA HT" label when VAT is involved (the
+  // delta between CA HT and CA TTC matters operationally), but expenses
+  // keep a single neutral label — the recoverable VAT already lives in
+  // its own dedicated tile, no need to brand the main number HT/TTC.
   const hasIncomeVat = data.vatCollected > 0.005;
   const hasExpenseVat = showExpenses && data.vatRecoverable > 0.005;
 
@@ -444,20 +466,20 @@ function BreakdownGrid({
     mode === "all-time"
       ? {
           ca: hasIncomeVat ? "CA HT total" : "CA total",
-          vatCollected: "TVA collectée totale (estimée)",
-          urssaf: "URSSAF estimée totale",
+          vatCollected: "TVA à reverser totale (estimée)",
+          urssaf: "Charges URSSAF estimées totales",
           reserve: "Réserve de sécurité recommandée (totale)",
           withdrawals: "Retraits totaux",
-          expenses: hasExpenseVat ? "Dépenses HT totales" : "Dépenses totales",
+          expenses: "Dépenses pro totales",
           vatRecoverable: "TVA récupérable totale (estimée)",
         }
       : {
           ca: hasIncomeVat ? "CA HT" : "Chiffre d'affaires",
-          vatCollected: "TVA collectée estimée",
-          urssaf: "URSSAF estimée",
+          vatCollected: "TVA à reverser estimée",
+          urssaf: "Charges URSSAF estimées",
           reserve: "Réserve de sécurité recommandée",
           withdrawals: "Déjà retiré",
-          expenses: hasExpenseVat ? "Dépenses HT" : "Dépenses pro",
+          expenses: "Dépenses pro",
           vatRecoverable: "TVA récupérable estimée",
         };
 
@@ -500,6 +522,7 @@ function BreakdownGrid({
             label={labels.expenses}
             amount={data.expenses}
             tone="negative"
+            recurringMonthlyTotal={recurringMonthlyTotal}
           />
         )}
       </div>
@@ -548,6 +571,7 @@ function BreakdownTile({
   hint,
   helperText,
   large = false,
+  recurringMonthlyTotal,
 }: {
   label: string;
   amount: number;
@@ -557,6 +581,13 @@ function BreakdownTile({
   helperText?: string;
   /** When true, renders the amount in a larger size (tiles without helper text). */
   large?: boolean;
+  /**
+   * Optional amber sub-line ("X €/mois récurrent"). Only used by the
+   * "Dépenses pro" tile to spell out the recurring TTC commitment
+   * separately from the period total. Hidden when 0 / undefined so
+   * users with no recurring template never see it.
+   */
+  recurringMonthlyTotal?: number;
 }) {
   const animated = useAnimatedNumber(amount);
   // Tone palette:
@@ -608,6 +639,30 @@ function BreakdownTile({
         )}
         {formatEuro(animated)}
       </p>
+      {recurringMonthlyTotal !== undefined && recurringMonthlyTotal > 0.005 && (
+        <p className="mt-2 flex items-center gap-1.5 font-mono text-[11px] font-medium tabular-nums text-amber-300">
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <polyline points="23 4 23 10 17 10" />
+            <polyline points="1 20 1 14 7 14" />
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+            <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
+          </svg>
+          {formatEuro(recurringMonthlyTotal)}
+          <span className="font-sans text-[10px] font-normal text-amber-300/80">
+            /mois récurrent
+          </span>
+        </p>
+      )}
       {helperText !== undefined && helperText !== "" && (
         <p className="mt-2.5 border-t border-white/5 pt-2.5 text-[11px] leading-snug text-slate-500">
           {helperText}

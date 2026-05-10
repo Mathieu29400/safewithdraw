@@ -96,10 +96,10 @@ export default function PrivacyPage() {
           Vous pouvez à tout moment demander la suppression complète de votre
           compte et de toutes les données associées en nous contactant à{" "}
           <a
-            href="mailto:hello@safewithdraw.app"
+            href="mailto:safewithdraw.contact@gmail.com"
             className="text-emerald-400 hover:underline"
           >
-            hello@safewithdraw.app
+            safewithdraw.contact@gmail.com
           </a>
           .
         </p>
@@ -119,10 +119,10 @@ export default function PrivacyPage() {
           Pour toute question relative à la confidentialité ou pour exercer
           vos droits, vous pouvez nous contacter à{" "}
           <a
-            href="mailto:hello@safewithdraw.app"
+            href="mailto:safewithdraw.contact@gmail.com"
             className="text-emerald-400 hover:underline"
           >
-            hello@safewithdraw.app
+            safewithdraw.contact@gmail.com
           </a>
           .
         </p>

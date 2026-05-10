@@ -59,10 +59,10 @@ export default function RefundPage() {
           remboursement au prorata pourra être étudié au cas par cas. Pour
           toute demande, contactez-nous à{" "}
           <a
-            href="mailto:hello@safewithdraw.app"
+            href="mailto:safewithdraw.contact@gmail.com"
             className="text-emerald-400 hover:underline"
           >
-            hello@safewithdraw.app
+            safewithdraw.contact@gmail.com
           </a>
           .
         </p>
@@ -73,10 +73,10 @@ export default function RefundPage() {
           Pour toute question relative à la facturation ou à l&apos;annulation
           de votre abonnement, écrivez-nous à{" "}
           <a
-            href="mailto:hello@safewithdraw.app"
+            href="mailto:safewithdraw.contact@gmail.com"
             className="text-emerald-400 hover:underline"
           >
-            hello@safewithdraw.app
+            safewithdraw.contact@gmail.com
           </a>
           .
         </p>

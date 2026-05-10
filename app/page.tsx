@@ -109,7 +109,7 @@ export default function HomePage() {
               <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <ProofTile label="CA HT" value="7 800,00 €" tone="positive" />
                 <ProofTile
-                  label="URSSAF estimée (25,6 %)"
+                  label="Charges URSSAF estimées (25,6 %)"
                   value="−1 996,80 €"
                   tone="negative"
                 />
@@ -133,7 +133,7 @@ export default function HomePage() {
               </div>
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <ProofTile
-                  label="TVA collectée estimée"
+                  label="TVA à reverser estimée"
                   value="1 560,00 €"
                   tone="neutral"
                 />
@@ -377,7 +377,7 @@ function ProofTile({
    * Same tone palette as the in-app `BreakdownTile`:
    *   positive → emerald (CA HT, montant retirable)
    *   negative → rose    (URSSAF, réserve, retraits, dépenses HT)
-   *   neutral  → slate   (TVA collectée / récupérable estimées — purely
+   *   neutral  → slate   (TVA à reverser / récupérable estimées — purely
    *                       informational, not added/subtracted from safe).
    */
   tone: "positive" | "negative" | "neutral";

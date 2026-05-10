@@ -11,7 +11,12 @@ import {
   type BillingStatus,
 } from "@/lib/billing";
 import { supabase } from "@/lib/supabase";
-import type { Expense, PeriodType, Transaction } from "@/lib/database.types";
+import type {
+  Expense,
+  PeriodType,
+  RecurringExpense,
+  Transaction,
+} from "@/lib/database.types";
 import type { PeriodRange } from "@/lib/use-safe-withdraw";
 import { useCurrentPeriod } from "@/lib/use-current-period";
 import {
@@ -20,6 +25,7 @@ import {
 } from "@/lib/use-previous-periods";
 
 import { AddExpenseDialog } from "./add-expense-dialog";
+import { AddRecurringExpenseDialog } from "./add-recurring-expense-dialog";
 import {
   AddTransactionDialog,
   type TransactionType,
@@ -34,7 +40,11 @@ type HistoryTransaction = Pick<
 >;
 type HistoryExpense = Pick<
   Expense,
-  "id" | "amount" | "description" | "created_at"
+  "id" | "amount" | "description" | "created_at" | "recurring_expense_id"
+>;
+type HistoryRecurringExpense = Pick<
+  RecurringExpense,
+  "id" | "amount" | "description" | "vat_rate"
 >;
 
 /**
@@ -104,6 +114,8 @@ export default function DashboardPage() {
 
   const [dialogType, setDialogType] = useState<TransactionType | null>(null);
   const [expenseDialogOpen, setExpenseDialogOpen] = useState(false);
+  const [recurringExpenseDialogOpen, setRecurringExpenseDialogOpen] =
+    useState(false);
   const [newPeriodDialogOpen, setNewPeriodDialogOpen] = useState(false);
 
   // Two-piece nav state — see `SelectedPeriod` doc above. Default is the
@@ -203,8 +215,12 @@ export default function DashboardPage() {
 
   const [history, setHistory] = useState<HistoryTransaction[] | null>(null);
   const [expenses, setExpenses] = useState<HistoryExpense[] | null>(null);
+  const [recurringExpenses, setRecurringExpenses] = useState<
+    HistoryRecurringExpense[] | null
+  >(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [expensesTick, setExpensesTick] = useState(0);
+  const [recurringExpensesTick, setRecurringExpensesTick] = useState(0);
 
   // SafeWithdraw is computed period-scoped or all-time depending on the
   // dropdown selection above ("Période actuelle" / "Depuis le début" /
@@ -311,7 +327,7 @@ export default function DashboardPage() {
     let cancelled = false;
     supabase
       .from("expenses")
-      .select("id, amount, description, created_at")
+      .select("id, amount, description, created_at, recurring_expense_id")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .then(({ data }) => {
@@ -322,12 +338,37 @@ export default function DashboardPage() {
     };
   }, [userId, advancedMode, expensesTick]);
 
+  // Recurring expense templates — only relevant in advanced mode (same
+  // gating as one-off expenses). The DB trigger
+  // `materialize_recurring_expenses` does the heavy lifting on the next
+  // period creation, so the UI here is purely a list + add/delete view.
+  useEffect(() => {
+    if (!userId) return;
+    if (advancedMode !== true) return;
+    let cancelled = false;
+    supabase
+      .from("recurring_expenses")
+      .select("id, amount, description, vat_rate")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (!cancelled) setRecurringExpenses(data ?? []);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, advancedMode, recurringExpensesTick]);
+
   const refreshHistory = useCallback(() => {
     setRefreshTick((t) => t + 1);
   }, []);
 
   const refreshExpenses = useCallback(() => {
     setExpensesTick((t) => t + 1);
+  }, []);
+
+  const refreshRecurringExpenses = useCallback(() => {
+    setRecurringExpensesTick((t) => t + 1);
   }, []);
 
   // Row-level delete handlers. The realtime subscriptions on
@@ -348,6 +389,73 @@ export default function DashboardPage() {
     async (id: string) => {
       if (!userId) return;
       await supabase.from("expenses").delete().eq("id", id);
+    },
+    [userId],
+  );
+
+  // "Pour tous les mois" path — deletes the recurring template, which
+  // CASCADEs to every materialized `expenses` row that was produced
+  // from it (past, present, future). Future "Nouvelle période URSSAF"
+  // clicks won't re-create it either, since the template is gone.
+  const handleDeleteRecurringSeriesAll = useCallback(
+    async (id: string) => {
+      if (!userId) return;
+      await supabase.from("recurring_expenses").delete().eq("id", id);
+    },
+    [userId],
+  );
+
+  // "À partir de ce mois-ci" path — un-links the materialized rows
+  // strictly BEFORE the current calendar month (they survive as
+  // plain one-off expenses, frozen in the user's archive), then
+  // deletes the template. CASCADE removes the still-linked rows,
+  // i.e. the current calendar month + every future occurrence.
+  //
+  // The cutoff is the FIRST DAY OF THIS CALENDAR MONTH UTC, NOT the
+  // live URSSAF period start. Two reasons:
+  //   1. The user thinks in calendar terms ("ce mois" = mai 2026),
+  //      not URSSAF cadence terms (which can drift to a future
+  //      period after a few "Nouvelle période URSSAF" clicks).
+  //   2. Without this, deleting "à partir de ce mois" while the
+  //      live period is e.g. sept 2026 would only nuke the sept row
+  //      and leave the current calendar month's row untouched, so
+  //      the "Dépenses pro" KPI on the user's current view would
+  //      not budge — the bug they reported.
+  const handleDeleteRecurringSeriesFromThisMonth = useCallback(
+    async (id: string) => {
+      if (!userId) return;
+      const cutoff = startOfCurrentMonthUtc();
+      await supabase
+        .from("expenses")
+        .update({ recurring_expense_id: null })
+        .eq("user_id", userId)
+        .eq("recurring_expense_id", id)
+        .lt("created_at", cutoff);
+      await supabase.from("recurring_expenses").delete().eq("id", id);
+    },
+    [userId],
+  );
+
+  // "À partir du mois prochain" path — keeps PAST rows AND the
+  // current calendar month's row (they get un-linked from the
+  // template), then deletes the template. CASCADE only removes
+  // rows dated on or after the first day of NEXT calendar month,
+  // i.e. future occurrences.
+  //
+  // Net effect: the user keeps everything they've already paid for,
+  // including the current month, and the recurrence simply stops
+  // appearing on subsequent periods.
+  const handleDeleteRecurringSeriesFromNextMonth = useCallback(
+    async (id: string) => {
+      if (!userId) return;
+      const cutoff = startOfNextMonthUtc();
+      await supabase
+        .from("expenses")
+        .update({ recurring_expense_id: null })
+        .eq("user_id", userId)
+        .eq("recurring_expense_id", id)
+        .lt("created_at", cutoff);
+      await supabase.from("recurring_expenses").delete().eq("id", id);
     },
     [userId],
   );
@@ -409,6 +517,20 @@ export default function DashboardPage() {
     });
   }, [history, view, cardPeriod]);
 
+  // Sum of every recurring template's monthly TTC amount. This is the
+  // user's locked-in monthly commitment, surfaced as the amber sub-line
+  // on the "Dépenses pro" KPI tile so it's visible at a glance even
+  // when the user is browsing a period that has none of those rows
+  // materialized yet (e.g. an old period from before the template
+  // existed). The value is independent of period scoping on purpose.
+  const recurringMonthlyTotal = useMemo<number | undefined>(() => {
+    if (!recurringExpenses) return undefined;
+    return recurringExpenses.reduce(
+      (sum, e) => sum + Number(e.amount),
+      0,
+    );
+  }, [recurringExpenses]);
+
   const filteredExpenses = useMemo<HistoryExpense[] | null>(() => {
     if (expenses === null) return null;
     if (view === "all-time") return expenses;
@@ -467,6 +589,28 @@ export default function DashboardPage() {
     };
   }, [userId, advancedMode]);
 
+  // Recurring expense templates — same advanced-mode gating.
+  useEffect(() => {
+    if (!userId) return;
+    if (advancedMode !== true) return;
+    const channel = supabase
+      .channel(`recurring-expenses:${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "recurring_expenses",
+          filter: `user_id=eq.${userId}`,
+        },
+        () => setRecurringExpensesTick((t) => t + 1),
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [userId, advancedMode]);
+
   const handleToggleAdvancedMode = useCallback(
     async (next: boolean) => {
       if (!userId) return;
@@ -510,6 +654,12 @@ export default function DashboardPage() {
                 {email}
               </span>
             )}
+            <Link
+              href="/account"
+              className="inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-sm font-medium text-slate-300 ring-1 ring-white/10 transition hover:bg-white/5 hover:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+            >
+              Mon compte
+            </Link>
             <Link
               href="/billing"
               className="inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-sm font-medium text-slate-300 ring-1 ring-white/10 transition hover:bg-white/5 hover:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
@@ -619,6 +769,7 @@ export default function DashboardPage() {
           isCurrentPeriod={isCurrentPeriod}
           periodSubtitle={cardPeriodSubtitle}
           periodType={currentPeriodType ?? undefined}
+          recurringMonthlyTotal={recurringMonthlyTotal}
         />
 
         <CashflowChart
@@ -657,25 +808,68 @@ export default function DashboardPage() {
         />
 
         {advancedMode === true && (
-          <section className="space-y-5">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <>
+            <section className="space-y-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                  Dépenses professionnelles
+                </h2>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setExpenseDialogOpen(true)}
+                    disabled={!userId}
+                    className="inline-flex items-center justify-center rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-[0_8px_24px_-8px_rgba(245,158,11,0.55)] transition duration-200 hover:scale-[1.02] hover:bg-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:ring-offset-2 focus:ring-offset-slate-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
+                  >
+                    + Dépense
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRecurringExpenseDialogOpen(true)}
+                    disabled={!userId}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-200 shadow-sm transition duration-200 hover:scale-[1.02] hover:border-amber-400/60 hover:bg-amber-500/20 hover:text-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:ring-offset-2 focus:ring-offset-slate-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <polyline points="23 4 23 10 17 10" />
+                      <polyline points="1 20 1 14 7 14" />
+                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+                      <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
+                    </svg>
+                    + Dépense récurrente (tous les mois)
+                  </button>
+                </div>
+              </div>
+              <ExpensesCard
+                expenses={filteredExpenses}
+                onDeleteOne={handleDeleteExpense}
+                onDeleteSeries={handleDeleteRecurringSeriesAll}
+              />
+            </section>
+
+            <section className="space-y-5">
               <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
-                Dépenses professionnelles
+                Dépenses récurrentes (mensuelles)
               </h2>
-              <button
-                type="button"
-                onClick={() => setExpenseDialogOpen(true)}
-                disabled={!userId}
-                className="inline-flex items-center justify-center rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-[0_8px_24px_-8px_rgba(245,158,11,0.55)] transition duration-200 hover:scale-[1.02] hover:bg-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:ring-offset-2 focus:ring-offset-slate-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
-              >
-                + Dépense
-              </button>
-            </div>
-            <ExpensesCard
-              expenses={filteredExpenses}
-              onDelete={handleDeleteExpense}
-            />
-          </section>
+              <RecurringExpensesCard
+                recurringExpenses={recurringExpenses}
+                declarationFrequency={declarationFrequency}
+                onDeleteFromThisMonth={handleDeleteRecurringSeriesFromThisMonth}
+                onDeleteFromNextMonth={handleDeleteRecurringSeriesFromNextMonth}
+                onDeleteAll={handleDeleteRecurringSeriesAll}
+              />
+            </section>
+          </>
         )}
 
         {/* Compact archive of every closed URSSAF period. Sits at the
@@ -708,6 +902,16 @@ export default function DashboardPage() {
           defaultDate={dialogDefaultDate}
           viewedPeriodRange={cardPeriod}
           viewedPeriodLabel={cardPeriodSubtitle}
+        />
+      )}
+
+      {userId && recurringExpenseDialogOpen && (
+        <AddRecurringExpenseDialog
+          open={recurringExpenseDialogOpen}
+          onOpenChange={setRecurringExpenseDialogOpen}
+          userId={userId}
+          onCreated={refreshRecurringExpenses}
+          declarationFrequency={declarationFrequency}
         />
       )}
 
@@ -980,6 +1184,30 @@ function nextPeriodStartFromLatest(
   ).toISOString();
 }
 
+/**
+ * First day of the current calendar month, UTC, ISO timestamp.
+ *
+ * Used as a cutoff when slicing recurring-expense series by "this
+ * month / next month" semantics. Calendar-month-anchored on
+ * purpose: the user thinks in calendar terms, not URSSAF cadence
+ * terms. See `handleDeleteRecurringSeriesFromThisMonth` for the
+ * full reasoning.
+ */
+function startOfCurrentMonthUtc(): string {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+  ).toISOString();
+}
+
+/** First day of NEXT calendar month, UTC, ISO timestamp. */
+function startOfNextMonthUtc(): string {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1),
+  ).toISOString();
+}
+
 function AdvancedModeSection({
   value,
   disabled,
@@ -1113,10 +1341,18 @@ function HistoryCard({
 
 function ExpensesCard({
   expenses,
-  onDelete,
+  onDeleteOne,
+  onDeleteSeries,
 }: {
   expenses: HistoryExpense[] | null;
-  onDelete: (id: string) => void;
+  /** Delete a single occurrence (one row). */
+  onDeleteOne: (id: string) => void;
+  /**
+   * Delete the whole recurring series — the template AND every row it
+   * materialized (CASCADE). Only invoked from rows that have a
+   * non-null `recurring_expense_id`.
+   */
+  onDeleteSeries: (recurringExpenseId: string) => void;
 }) {
   if (expenses === null) {
     return (
@@ -1142,39 +1378,458 @@ function ExpensesCard({
   return (
     <div className="card-soft card-interactive overflow-hidden rounded-2xl bg-slate-900/50 ring-1 ring-white/10 backdrop-blur-xl">
       <ul className="max-h-[440px] divide-y divide-white/5 overflow-y-auto">
-        {expenses.map((e) => (
-          <li
-            key={e.id}
-            className="animate-row-in group flex items-center justify-between gap-3 px-6 py-4 transition-colors duration-150 hover:bg-white/[0.03]"
-          >
-            <div className="flex min-w-0 items-center gap-3">
-              <span
-                className="inline-flex h-1.5 w-1.5 flex-shrink-0 rounded-full bg-rose-400"
-                aria-hidden="true"
-              />
-              <span className="truncate text-sm text-slate-200">
-                {e.description?.trim() || "Dépense"}
-              </span>
-              <span className="flex-shrink-0 text-xs text-slate-500 tabular-nums">
-                {formatDate(e.created_at)}
-              </span>
-            </div>
-            <div className="flex flex-shrink-0 items-center gap-3">
-              <span className="font-mono text-sm font-medium tabular-nums text-rose-400">
-                <span className="mr-0.5 font-sans text-slate-500">−</span>
-                {formatEuro(e.amount)}
-              </span>
-              <DeleteRowButton
-                onConfirm={() => onDelete(e.id)}
-                ariaLabel={`Supprimer la dépense de ${formatEuro(e.amount)}`}
-                confirmMessage="Supprimer cette dépense ?"
-              />
-            </div>
-          </li>
-        ))}
+        {expenses.map((e) => {
+          const isRecurring = e.recurring_expense_id !== null;
+          return (
+            <li
+              key={e.id}
+              className="animate-row-in group flex items-center justify-between gap-3 px-6 py-4 transition-colors duration-150 hover:bg-white/[0.03]"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className={`inline-flex h-1.5 w-1.5 flex-shrink-0 rounded-full ${
+                    isRecurring ? "bg-amber-400" : "bg-rose-400"
+                  }`}
+                  aria-hidden="true"
+                />
+                <span className="truncate text-sm text-slate-200">
+                  {e.description?.trim() || "Dépense"}
+                </span>
+                {isRecurring && (
+                  <span
+                    className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-amber-300 ring-1 ring-amber-500/20"
+                    title="Dépense récurrente"
+                  >
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <polyline points="23 4 23 10 17 10" />
+                      <polyline points="1 20 1 14 7 14" />
+                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+                      <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
+                    </svg>
+                    Récurrente
+                  </span>
+                )}
+                <span className="flex-shrink-0 text-xs text-slate-500 tabular-nums">
+                  {formatDate(e.created_at)}
+                </span>
+              </div>
+              <div className="flex flex-shrink-0 items-center gap-3">
+                <span className="font-mono text-sm font-medium tabular-nums text-rose-400">
+                  <span className="mr-0.5 font-sans text-slate-500">−</span>
+                  {formatEuro(e.amount)}
+                </span>
+                {isRecurring && e.recurring_expense_id ? (
+                  <DeleteExpenseScopeButton
+                    onlyThisOne={() => onDeleteOne(e.id)}
+                    allOccurrences={() =>
+                      onDeleteSeries(e.recurring_expense_id as string)
+                    }
+                    ariaLabel={`Supprimer la dépense récurrente de ${formatEuro(e.amount)}`}
+                  />
+                ) : (
+                  <DeleteRowButton
+                    onConfirm={() => onDeleteOne(e.id)}
+                    ariaLabel={`Supprimer la dépense de ${formatEuro(e.amount)}`}
+                    confirmMessage="Supprimer cette dépense ?"
+                  />
+                )}
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
+}
+
+/**
+ * Delete affordance for an expense row that came from a recurring
+ * template. The first click expands inline into a 3-button choice
+ * panel: "Ce mois-ci" / "Tous les mois" / "Annuler". Same 4-second
+ * auto-cancel timeout as the regular DeleteRowButton so an accidental
+ * tap never sticks.
+ *
+ *   - "Ce mois-ci"     → onDeleteOne(): delete this single expense row.
+ *                       Other periods stay untouched, the template
+ *                       lives on (next "Nouvelle période URSSAF" will
+ *                       still re-materialize it).
+ *   - "Tous les mois"  → onDeleteSeries(): delete the recurring
+ *                       template, which CASCADE-deletes every row it
+ *                       ever produced.
+ */
+function DeleteExpenseScopeButton({
+  onlyThisOne,
+  allOccurrences,
+  ariaLabel,
+}: {
+  onlyThisOne: () => void;
+  allOccurrences: () => void;
+  ariaLabel: string;
+}) {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const t = window.setTimeout(() => setArmed(false), 6000);
+    return () => window.clearTimeout(t);
+  }, [armed]);
+
+  if (armed) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span className="hidden text-[11px] text-slate-400 sm:inline">
+          Supprimer pour :
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            setArmed(false);
+            onlyThisOne();
+          }}
+          className="inline-flex items-center justify-center rounded-md bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-200 ring-1 ring-amber-500/30 transition hover:bg-amber-500/25 hover:text-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+        >
+          Ce mois-ci
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setArmed(false);
+            allOccurrences();
+          }}
+          className="inline-flex items-center justify-center rounded-md bg-rose-500/15 px-2.5 py-1 text-[11px] font-medium text-rose-300 ring-1 ring-rose-500/30 transition hover:bg-rose-500/25 hover:text-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-500/40"
+        >
+          Tous les mois
+        </button>
+        <button
+          type="button"
+          onClick={() => setArmed(false)}
+          aria-label="Annuler la suppression"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition hover:bg-white/5 hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-white/20"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setArmed(true)}
+      aria-label={ariaLabel}
+      title="Supprimer"
+      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition hover:bg-rose-500/10 hover:text-rose-300 focus:outline-none focus:ring-2 focus:ring-rose-500/30"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <polyline points="3 6 5 6 21 6" />
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+        <path d="M10 11v6" />
+        <path d="M14 11v6" />
+        <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+      </svg>
+    </button>
+  );
+}
+
+/**
+ * RecurringExpensesCard — list of monthly recurring expense templates.
+ *
+ * Read-only: the only mutation surfaced inline is delete (same two-step
+ * UX as every other row). Adding goes through the AddRecurringExpenseDialog
+ * triggered from the section header. Each row shows the monthly amount
+ * AND, when the user is on a quarterly cadence, the materialized
+ * quarterly value (× 3) so the next-period effect is unambiguous.
+ */
+function RecurringExpensesCard({
+  recurringExpenses,
+  declarationFrequency,
+  onDeleteFromThisMonth,
+  onDeleteFromNextMonth,
+  onDeleteAll,
+}: {
+  recurringExpenses: HistoryRecurringExpense[] | null;
+  declarationFrequency: PeriodType;
+  /**
+   * Cutoff = first day of the current calendar month UTC. Past
+   * materialized rows survive as one-off expenses; the current
+   * month's row + every future occurrence + the template itself
+   * are removed. The "Dépenses pro" KPI of any view on the
+   * current month or later drops accordingly.
+   */
+  onDeleteFromThisMonth: (recurringExpenseId: string) => void;
+  /**
+   * Cutoff = first day of next calendar month UTC. Past AND
+   * current-month rows survive (un-linked from the template);
+   * only future occurrences + the template itself are removed.
+   * The current month's "Dépenses pro" KPI stays unchanged.
+   */
+  onDeleteFromNextMonth: (recurringExpenseId: string) => void;
+  /**
+   * Wipes the entire history: deletes the template, which CASCADE-
+   * deletes every row it ever produced.
+   */
+  onDeleteAll: (recurringExpenseId: string) => void;
+}) {
+  if (recurringExpenses === null) {
+    return (
+      <div className="card-soft rounded-2xl bg-slate-900/50 p-6 text-sm text-slate-400 ring-1 ring-white/10 backdrop-blur-xl">
+        Chargement des dépenses récurrentes…
+      </div>
+    );
+  }
+
+  if (recurringExpenses.length === 0) {
+    return (
+      <div className="card-soft rounded-2xl bg-slate-900/50 p-10 text-center ring-1 ring-white/10 backdrop-blur-xl">
+        <p className="text-sm font-medium text-slate-200">
+          Aucune dépense récurrente
+        </p>
+        <p className="mt-1.5 text-sm text-slate-500">
+          Ajoutez vos dépenses fixes (loyer, abonnements, comptable…). Elles
+          seront ajoutées automatiquement à chaque{" "}
+          <span className="font-medium text-amber-300">
+            nouvelle période URSSAF
+          </span>
+          {declarationFrequency === "quarterly" ? " (× 3 sur le trimestre)" : ""}
+          .
+        </p>
+      </div>
+    );
+  }
+
+  const isQuarterly = declarationFrequency === "quarterly";
+
+  return (
+    <div className="card-soft card-interactive overflow-hidden rounded-2xl bg-slate-900/50 ring-1 ring-white/10 backdrop-blur-xl">
+      <ul className="max-h-[440px] divide-y divide-white/5 overflow-y-auto">
+        {recurringExpenses.map((e) => {
+          const materialized = isQuarterly ? e.amount * 3 : e.amount;
+          return (
+            <li
+              key={e.id}
+              className="animate-row-in group flex items-center justify-between gap-3 px-6 py-4 transition-colors duration-150 hover:bg-white/[0.03]"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className="inline-flex h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-400"
+                  aria-hidden="true"
+                />
+                <div className="min-w-0">
+                  <span className="block truncate text-sm text-slate-200">
+                    {e.description?.trim() || "Dépense récurrente"}
+                  </span>
+                  <span className="text-[11px] uppercase tracking-[0.14em] text-slate-500">
+                    Mensuelle
+                    {e.vat_rate !== null
+                      ? ` · TVA ${formatVatRate(e.vat_rate)}`
+                      : ""}
+                  </span>
+                </div>
+              </div>
+              <div className="flex flex-shrink-0 items-center gap-3">
+                <div className="text-right">
+                  <span className="block font-mono text-sm font-medium tabular-nums text-amber-300">
+                    <span className="mr-0.5 font-sans text-slate-500">−</span>
+                    {formatEuro(e.amount)}
+                    <span className="ml-1 text-[11px] font-normal text-slate-500">
+                      / mois
+                    </span>
+                  </span>
+                  {isQuarterly && (
+                    <span className="block text-[11px] tabular-nums text-slate-500">
+                      = {formatEuro(materialized)} / trimestre
+                    </span>
+                  )}
+                </div>
+                <DeleteRecurringTemplateButton
+                  onDeleteFromThisMonth={() => onDeleteFromThisMonth(e.id)}
+                  onDeleteFromNextMonth={() => onDeleteFromNextMonth(e.id)}
+                  onDeleteAll={() => onDeleteAll(e.id)}
+                  ariaLabel={`Supprimer le modèle de dépense récurrente de ${formatEuro(e.amount)}`}
+                />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Delete affordance for a recurring TEMPLATE row.
+ *
+ * Clicking the trash icon expands the row footer into an explanatory
+ * panel with three clear choices, ordered from least to most
+ * destructive:
+ *
+ *   - "À partir du mois prochain"
+ *       The recurrence stops AFTER this month. The current month's
+ *       row stays (the user already paid for it), the historical
+ *       archive stays untouched, only future occurrences disappear.
+ *       Use this for a regular cancellation.
+ *
+ *   - "À partir de ce mois-ci"
+ *       The current calendar month's row also goes away — useful
+ *       when the user just discovered they don't actually owe
+ *       this month either. Past months are KEPT as plain one-off
+ *       rows. The "Dépenses pro" KPI of every view on the current
+ *       month or later drops immediately.
+ *
+ *   - "Tout supprimer (historique inclus)"
+ *       Wipes everything — the template AND every past/present/
+ *       future occurrence the trigger ever produced. Use this when
+ *       the template was a mistake from day one.
+ *
+ * Auto-cancel after 8 s so a stray tap never sticks. The longer
+ * timeout (vs 4 s on simple deletes) accounts for users actually
+ * reading the option labels before deciding.
+ */
+function DeleteRecurringTemplateButton({
+  onDeleteFromThisMonth,
+  onDeleteFromNextMonth,
+  onDeleteAll,
+  ariaLabel,
+}: {
+  onDeleteFromThisMonth: () => void;
+  onDeleteFromNextMonth: () => void;
+  onDeleteAll: () => void;
+  ariaLabel: string;
+}) {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const t = window.setTimeout(() => setArmed(false), 8000);
+    return () => window.clearTimeout(t);
+  }, [armed]);
+
+  if (!armed) {
+    return (
+      <button
+        type="button"
+        onClick={() => setArmed(true)}
+        aria-label={ariaLabel}
+        title="Supprimer"
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition hover:bg-rose-500/10 hover:text-rose-300 focus:outline-none focus:ring-2 focus:ring-rose-500/30"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <polyline points="3 6 5 6 21 6" />
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+          <path d="M10 11v6" />
+          <path d="M14 11v6" />
+          <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+        </svg>
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex w-full max-w-[260px] flex-col items-stretch gap-1.5 rounded-lg border border-white/10 bg-slate-950/80 p-2 sm:max-w-[300px]">
+      <p className="px-1 text-[11px] font-medium leading-snug text-slate-200">
+        Supprimer cette dépense récurrente :
+      </p>
+      <button
+        type="button"
+        onClick={() => {
+          setArmed(false);
+          onDeleteFromNextMonth();
+        }}
+        className="rounded-md bg-sky-500/15 px-2.5 py-1.5 text-left text-[11px] font-medium leading-tight text-sky-200 ring-1 ring-sky-500/30 transition hover:bg-sky-500/25 hover:text-sky-100 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+      >
+        À partir du mois prochain
+        <span className="block text-[10px] font-normal text-sky-300/70">
+          Garder ce mois et l’historique
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setArmed(false);
+          onDeleteFromThisMonth();
+        }}
+        className="rounded-md bg-amber-500/15 px-2.5 py-1.5 text-left text-[11px] font-medium leading-tight text-amber-200 ring-1 ring-amber-500/30 transition hover:bg-amber-500/25 hover:text-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+      >
+        À partir de ce mois-ci
+        <span className="block text-[10px] font-normal text-amber-300/70">
+          Garder uniquement l’historique passé
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setArmed(false);
+          onDeleteAll();
+        }}
+        className="rounded-md bg-rose-500/15 px-2.5 py-1.5 text-left text-[11px] font-medium leading-tight text-rose-300 ring-1 ring-rose-500/30 transition hover:bg-rose-500/25 hover:text-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-500/40"
+      >
+        Tout supprimer
+        <span className="block text-[10px] font-normal text-rose-300/70">
+          Effacer aussi l’historique
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => setArmed(false)}
+        className="rounded-md px-2.5 py-1 text-[11px] font-medium text-slate-400 transition hover:bg-white/5 hover:text-slate-200 focus:outline-none focus:ring-2 focus:ring-white/20"
+      >
+        Annuler
+      </button>
+    </div>
+  );
+}
+
+function formatVatRate(rate: number): string {
+  const pct = rate * 100;
+  const rounded =
+    Math.abs(pct - Math.round(pct)) < 1e-6 ? Math.round(pct) : pct.toFixed(1);
+  return `${String(rounded).replace(".", ",")} %`;
 }
 
 /**
@@ -1415,7 +2070,7 @@ function PreviousPeriodRow({ period }: { period: PreviousPeriodSummary }) {
         <dl className="mt-3 grid grid-cols-1 gap-x-4 gap-y-2 border-t border-white/5 pt-3 text-xs sm:grid-cols-2">
           {hasIncomeVat && (
             <PreviousPeriodMetric
-              label="TVA collectée estimée"
+              label="TVA à reverser estimée"
               amount={result.vatCollected}
               tone="neutral"
             />

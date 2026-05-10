@@ -1,0 +1,8 @@
+feat: depenses recurrentes, page Mon compte, corrections KPI et stabilite dev
+
+- Depenses recurrentes : choix de portee a la creation (mois precedents / a partir de ce mois) ; 3 options de suppression sur le template (mois prochain, ce mois-ci, tout supprimer) ; correction du cutoff calendaire pour que la suppression mette bien a jour les KPI
+- Page /account : changement d'activite URSSAF, taux et frequence avec reset complet des dashboards et confirmation par saisie de RESET
+- Header dashboard : lien Mon compte
+- Labels KPI : URSSAF estimee -> Charges URSSAF estimees, TVA collectee estimee -> TVA a reverser estimee
+- Dialogs centres sur l'ecran via globals.css (fix Tailwind v4 preflight)
+- Dev server : bascule sur Webpack (--webpack) pour eviter les crashes memoire Turbopack

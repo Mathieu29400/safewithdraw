@@ -42,6 +42,21 @@ body {
 }
 
 /* ----------------------------------------------------------------------------
+ * Native <dialog> centering — Tailwind v4 preflight wipes the UA-stylesheet
+ * rules that normally center modal dialogs. We restore them explicitly.
+ * inset: 0 + margin: auto + position: fixed = dead-center on screen.
+ * max-height / overflow-y let tall dialogs scroll instead of clipping.
+ * --------------------------------------------------------------------------*/
+
+dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+}
+
+/* ----------------------------------------------------------------------------
  * Card surfaces — glassmorphism with inner highlight
  * --------------------------------------------------------------------------*/
 /* `card-elevated` — the hero KPI. Multi-layer dark shadow with a thin white

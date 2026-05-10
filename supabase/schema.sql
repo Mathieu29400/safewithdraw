@@ -104,6 +104,39 @@ alter table public.expenses
     check (vat_rate is null or (vat_rate > 0 and vat_rate < 1));
 
 -- =============================================================================
+-- 2ter. recurring_expenses
+-- =============================================================================
+-- Templates for monthly recurring expenses (subscriptions, rent, …).
+-- Stored amount is always the MONTHLY value. When a new period row is
+-- inserted (manual reset OR auto-rotation), a trigger copies each
+-- template into `expenses` for that period — multiplied by 3 for
+-- quarterly periods.
+
+create table if not exists public.recurring_expenses (
+  id          uuid          primary key default gen_random_uuid(),
+  user_id     uuid          not null references public.profiles(id) on delete cascade,
+  amount      numeric(14,2) not null check (amount > 0),
+  description text,
+  vat_rate    numeric(5,4)  check (vat_rate is null or (vat_rate > 0 and vat_rate < 1)),
+  created_at  timestamptz   not null default now()
+);
+
+create index if not exists recurring_expenses_user_idx
+  on public.recurring_expenses (user_id, created_at desc);
+
+-- Optional link from each materialized expense back to its recurring
+-- template. NULL = one-off (manual) expense; non-null = produced by
+-- the `recurring_expenses` triggers. ON DELETE CASCADE so deleting a
+-- template wipes every occurrence ("supprimer pour tous les mois").
+alter table public.expenses
+  add column if not exists recurring_expense_id uuid
+    references public.recurring_expenses(id) on delete cascade;
+
+create index if not exists expenses_recurring_id_idx
+  on public.expenses (recurring_expense_id)
+  where recurring_expense_id is not null;
+
+-- =============================================================================
 -- 3. urssaf_profile
 -- =============================================================================
 -- The user's URSSAF configuration (one row per user).
@@ -139,6 +172,155 @@ create table if not exists public.periods (
 
 create index if not exists periods_user_start_idx
   on public.periods (user_id, start_date desc);
+
+-- =============================================================================
+-- Materialize recurring expenses on every new period
+-- =============================================================================
+-- Trigger function: copies every recurring template into `expenses`
+-- when a period is inserted. Quarterly periods multiply the monthly
+-- amount by 3 so the materialized row reflects the full quarter.
+--
+-- SECURITY DEFINER so it can write to `expenses` even when invoked from
+-- a RLS-restricted client. The WHERE clause re-checks ownership so the
+-- elevated privileges can never be used to write a row owned by anyone
+-- other than the period's owner.
+
+create or replace function public.materialize_recurring_expenses()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  multiplier integer;
+begin
+  multiplier := case when NEW.type = 'quarterly' then 3 else 1 end;
+
+  insert into public.expenses (
+    user_id, amount, description, vat_rate, created_at, recurring_expense_id
+  )
+  select
+    NEW.user_id,
+    re.amount * multiplier,
+    re.description,
+    re.vat_rate,
+    NEW.start_date,
+    re.id
+  from public.recurring_expenses re
+  where re.user_id = NEW.user_id;
+
+  return NEW;
+end;
+$$;
+
+revoke execute on function public.materialize_recurring_expenses() from public;
+revoke execute on function public.materialize_recurring_expenses() from anon;
+revoke execute on function public.materialize_recurring_expenses() from authenticated;
+
+drop trigger if exists on_period_created on public.periods;
+create trigger on_period_created
+  after insert on public.periods
+  for each row execute function public.materialize_recurring_expenses();
+
+-- Symmetric direction: when a recurring template is INSERTED, fan it
+-- out across every CALENDAR BUCKET the user has any activity in
+-- (transaction, manual expense, period row) plus the current calendar
+-- bucket, so every dashboard surface — current period, future
+-- periods, and EVERY archived month/quarter — reflects the line
+-- immediately.
+--
+-- Bucket granularity comes from the user's `declaration_frequency`
+-- (monthly = 1st of month UTC, quarterly = 1st of quarter UTC * 3 on
+-- the amount). Centralised in the `_fanout_recurring_template`
+-- helper so the trigger and any future backfill share one source of
+-- truth.
+create or replace function public._fanout_recurring_template(p_template_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  template public.recurring_expenses;
+  freq text;
+  multiplier integer;
+  bucket_unit text;
+begin
+  select * into template from public.recurring_expenses where id = p_template_id;
+  if not found then
+    return;
+  end if;
+
+  select declaration_frequency into freq
+  from public.urssaf_profile
+  where user_id = template.user_id;
+  freq := coalesce(freq, 'monthly');
+
+  if freq = 'quarterly' then
+    multiplier := 3;
+    bucket_unit := 'quarter';
+  else
+    multiplier := 1;
+    bucket_unit := 'month';
+  end if;
+
+  insert into public.expenses (
+    user_id, amount, description, vat_rate, created_at, recurring_expense_id
+  )
+  select
+    template.user_id,
+    template.amount * multiplier,
+    template.description,
+    template.vat_rate,
+    bucket_start,
+    template.id
+  from (
+    select distinct
+      date_trunc(bucket_unit, occurred_at, 'UTC') as bucket_start
+    from (
+      select created_at as occurred_at
+        from public.transactions
+        where user_id = template.user_id
+      union all
+      select created_at as occurred_at
+        from public.expenses
+        where user_id = template.user_id
+          and recurring_expense_id is null
+      union all
+      select start_date as occurred_at
+        from public.periods
+        where user_id = template.user_id
+      union all
+      select now() as occurred_at
+    ) all_events
+  ) buckets;
+end;
+$$;
+
+revoke execute on function public._fanout_recurring_template(uuid) from public;
+revoke execute on function public._fanout_recurring_template(uuid) from anon;
+revoke execute on function public._fanout_recurring_template(uuid) from authenticated;
+
+create or replace function public.materialize_for_existing_periods()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public._fanout_recurring_template(NEW.id);
+  return NEW;
+end;
+$$;
+
+revoke execute on function public.materialize_for_existing_periods() from public;
+revoke execute on function public.materialize_for_existing_periods() from anon;
+revoke execute on function public.materialize_for_existing_periods() from authenticated;
+
+drop trigger if exists on_recurring_expense_created on public.recurring_expenses;
+create trigger on_recurring_expense_created
+  after insert on public.recurring_expenses
+  for each row execute function public.materialize_for_existing_periods();
 
 -- =============================================================================
 -- Auto-create profile on user signup
@@ -179,11 +361,12 @@ create trigger on_auth_user_created
 -- Default-deny on every table; explicit policies grant per-row access only to
 -- the authenticated owner.
 
-alter table public.profiles        enable row level security;
-alter table public.transactions    enable row level security;
-alter table public.expenses        enable row level security;
-alter table public.urssaf_profile  enable row level security;
-alter table public.periods         enable row level security;
+alter table public.profiles            enable row level security;
+alter table public.transactions        enable row level security;
+alter table public.expenses            enable row level security;
+alter table public.recurring_expenses  enable row level security;
+alter table public.urssaf_profile      enable row level security;
+alter table public.periods             enable row level security;
 
 -- ---------- profiles ---------------------------------------------------------
 
@@ -246,6 +429,29 @@ create policy "expenses_update_own" on public.expenses
 
 drop policy if exists "expenses_delete_own" on public.expenses;
 create policy "expenses_delete_own" on public.expenses
+  for delete to authenticated
+  using (user_id = (select auth.uid()));
+
+-- ---------- recurring_expenses ----------------------------------------------
+
+drop policy if exists "recurring_expenses_select_own" on public.recurring_expenses;
+create policy "recurring_expenses_select_own" on public.recurring_expenses
+  for select to authenticated
+  using (user_id = (select auth.uid()));
+
+drop policy if exists "recurring_expenses_insert_own" on public.recurring_expenses;
+create policy "recurring_expenses_insert_own" on public.recurring_expenses
+  for insert to authenticated
+  with check (user_id = (select auth.uid()));
+
+drop policy if exists "recurring_expenses_update_own" on public.recurring_expenses;
+create policy "recurring_expenses_update_own" on public.recurring_expenses
+  for update to authenticated
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));
+
+drop policy if exists "recurring_expenses_delete_own" on public.recurring_expenses;
+create policy "recurring_expenses_delete_own" on public.recurring_expenses
   for delete to authenticated
   using (user_id = (select auth.uid()));
 
@@ -341,9 +547,19 @@ begin
   ) then
     alter publication supabase_realtime add table public.expenses;
   end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'recurring_expenses'
+  ) then
+    alter publication supabase_realtime add table public.recurring_expenses;
+  end if;
 end $$;
 
-alter table public.transactions   replica identity full;
-alter table public.periods        replica identity full;
-alter table public.urssaf_profile replica identity full;
-alter table public.expenses       replica identity full;
+alter table public.transactions       replica identity full;
+alter table public.periods            replica identity full;
+alter table public.urssaf_profile     replica identity full;
+alter table public.expenses           replica identity full;
+alter table public.recurring_expenses replica identity full;
