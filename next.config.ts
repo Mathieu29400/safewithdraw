@@ -47,7 +47,7 @@ export default sentryEnabled
       project: process.env.SENTRY_PROJECT,
       silent: !process.env.CI,
       widenClientFileUpload: true,
-      hideSourceMaps: true,
+      sourcemaps: { deleteSourcemapsAfterUpload: true },
       disableLogger: true,
       automaticVercelMonitors: false,
       tunnelRoute: "/monitoring",
