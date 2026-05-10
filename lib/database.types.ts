@@ -246,6 +246,27 @@ export type Database = {
           },
         ];
       };
+      trial_history: {
+        Row: {
+          email_hash: string;
+          first_trial_at: string;
+          last_trial_at: string;
+          trial_count: number;
+        };
+        Insert: {
+          email_hash: string;
+          first_trial_at?: string;
+          last_trial_at?: string;
+          trial_count?: number;
+        };
+        Update: {
+          email_hash?: string;
+          first_trial_at?: string;
+          last_trial_at?: string;
+          trial_count?: number;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;

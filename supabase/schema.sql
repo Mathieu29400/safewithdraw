@@ -323,6 +323,42 @@ create trigger on_recurring_expense_created
   for each row execute function public.materialize_for_existing_periods();
 
 -- =============================================================================
+-- 5. trial_history
+-- =============================================================================
+-- Pseudonymous ledger of every email that ever consumed a free trial.
+-- Indexed by `sha256(lower(trim(email)))` so we never store the email
+-- itself (RGPD-friendly: not reversible without the original input).
+--
+-- Used by `handle_new_user` to decide whether a new signup deserves a
+-- fresh 30-day trial or starts already-expired (forcing a paid
+-- subscription via /billing). Written to by /api/account/delete just
+-- before the user row is hard-deleted.
+
+create table if not exists public.trial_history (
+  email_hash     text        primary key,
+  first_trial_at timestamptz not null default now(),
+  last_trial_at  timestamptz not null default now(),
+  trial_count    integer     not null default 1
+);
+
+alter table public.trial_history enable row level security;
+-- No policies → default-deny. Only SECURITY DEFINER functions and the
+-- service role ever touch this table.
+
+create or replace function public.compute_email_hash(p_email text)
+returns text
+language sql
+immutable
+set search_path = public, extensions
+as $$
+  select encode(extensions.digest(lower(trim(p_email)), 'sha256'), 'hex');
+$$;
+
+revoke execute on function public.compute_email_hash(text) from public;
+revoke execute on function public.compute_email_hash(text) from anon;
+revoke execute on function public.compute_email_hash(text) from authenticated;
+
+-- =============================================================================
 -- Auto-create profile on user signup
 -- =============================================================================
 -- A trigger on `auth.users` inserts the matching row in `public.profiles`
@@ -331,6 +367,11 @@ create trigger on_recurring_expense_created
 -- The function is `SECURITY DEFINER` so the trigger can write to `public.profiles`
 -- on behalf of the new user, but EXECUTE is revoked from `public`/`anon`/
 -- `authenticated` so the function cannot be called directly via PostgREST RPC.
+--
+-- Trial-abuse guard: if the email's hash already appears in
+-- `trial_history`, the new profile starts with `trial_end = now()` so
+-- the user is immediately redirected to /billing. They can still
+-- subscribe; only the free re-trial is blocked.
 
 create or replace function public.handle_new_user()
 returns trigger
@@ -338,10 +379,26 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  hashed text;
+  has_history boolean;
+  computed_trial_end timestamptz;
 begin
-  insert into public.profiles (id, email)
-  values (new.id, new.email)
+  hashed := public.compute_email_hash(new.email);
+
+  select exists(select 1 from public.trial_history where email_hash = hashed)
+  into has_history;
+
+  if has_history then
+    computed_trial_end := now();
+  else
+    computed_trial_end := now() + interval '30 days';
+  end if;
+
+  insert into public.profiles (id, email, trial_end)
+  values (new.id, new.email, computed_trial_end)
   on conflict (id) do nothing;
+
   return new;
 end;
 $$;

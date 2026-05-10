@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
@@ -84,7 +86,39 @@ export async function POST(req: NextRequest) {
     console.error("[account/delete] Paddle cancel failed (continuing):", err);
   }
 
-  // 4. Hard delete. ON DELETE CASCADE in `schema.sql` wipes the rest.
+  // 4. Record the trial-history pseudonym BEFORE deletion so the next
+  // signup with the same email starts already-expired. The hash is
+  // SHA-256(lower(trim(email))) — identical to the Postgres helper
+  // `compute_email_hash()` so server-side and client-side agree.
+  // Errors are logged but never block deletion: a missed ledger insert
+  // is preferable to a stuck account-removal request.
+  if (userData.user.email) {
+    try {
+      const emailHash = computeEmailHash(userData.user.email);
+      const { error: historyError } = await admin
+        .from("trial_history")
+        .upsert(
+          {
+            email_hash: emailHash,
+            last_trial_at: new Date().toISOString(),
+          },
+          { onConflict: "email_hash", ignoreDuplicates: true },
+        );
+      if (historyError) {
+        console.error(
+          "[account/delete] trial_history upsert failed (continuing):",
+          historyError,
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[account/delete] trial_history hash failed (continuing):",
+        err,
+      );
+    }
+  }
+
+  // 5. Hard delete. ON DELETE CASCADE in `schema.sql` wipes the rest.
   const { error: deleteError } = await admin.auth.admin.deleteUser(userId);
   if (deleteError) {
     console.error("[account/delete] deleteUser error:", deleteError);
@@ -95,6 +129,12 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ ok: true });
+}
+
+function computeEmailHash(email: string): string {
+  return createHash("sha256")
+    .update(email.toLowerCase().trim())
+    .digest("hex");
 }
 
 /**
