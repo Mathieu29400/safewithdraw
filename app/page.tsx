@@ -46,8 +46,7 @@ export default function HomePage() {
             </Link>
           </div>
           <p className="mt-4 text-sm text-slate-400">
-            Utilisé par des micro-entrepreneurs / auto-entrepreneurs et des freelances pour sécuriser leurs retraits en toute
-            sécurité • Sans engagement
+            Utilisé par des micro-entrepreneurs / auto-entrepreneurs et des freelances pour sécuriser leurs retraits en toute sécurité
           </p>
           <p className="mx-auto mt-3 inline-flex items-center rounded-full bg-emerald-500/10 px-4 py-1.5 text-sm font-medium text-emerald-200 ring-1 ring-emerald-400/25">
             Sans carte bancaire • Accès immédiat • Sans engagement
