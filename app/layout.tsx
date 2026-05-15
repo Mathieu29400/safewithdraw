@@ -24,7 +24,7 @@ export const metadata: Metadata = {
     template: "%s · SafeWithdraw",
   },
   description:
-    "SafeWithdraw calcule en temps réel le montant que tu peux retirer de ton activité freelance sans risque. Calcul URSSAF automatique, réserve de sécurité incluse. Essai gratuit 30 jours, sans carte.",
+    "SafeWithdraw calcule en temps réel ce que tu peux retirer sans te mettre en danger (URSSAF incluse). Utilisé par des micro-entrepreneurs / auto-entrepreneurs et des freelances pour sécuriser leurs retraits en toute sécurité.",
   applicationName: "SafeWithdraw",
   keywords: [
     "freelance",
@@ -55,14 +55,14 @@ export const metadata: Metadata = {
     title:
       "SafeWithdraw — Combien tu peux te verser, à tout moment",
     description:
-      "Calcul URSSAF automatique, réserve de sécurité incluse. Sache exactement combien retirer sans risque. Essai gratuit 30 jours.",
+      "SafeWithdraw calcule en temps réel ce que tu peux retirer sans te mettre en danger (URSSAF incluse). Utilisé par des micro-entrepreneurs / auto-entrepreneurs et des freelances pour sécuriser leurs retraits en toute sécurité.",
   },
   twitter: {
     card: "summary_large_image",
     title:
       "SafeWithdraw — Combien tu peux te verser, à tout moment",
     description:
-      "Calcul URSSAF automatique, réserve de sécurité incluse. Essai gratuit 30 jours, sans carte.",
+      "SafeWithdraw calcule en temps réel ce que tu peux retirer sans te mettre en danger (URSSAF incluse). Utilisé par des micro-entrepreneurs / auto-entrepreneurs et des freelances pour sécuriser leurs retraits en toute sécurité.",
   },
   robots: {
     index: true,
