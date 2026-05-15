@@ -33,6 +33,7 @@ import {
 import { CashflowChart } from "./cashflow-chart";
 import { NewPeriodDialog } from "./new-period-dialog";
 import { SafeWithdrawCard } from "./safe-withdraw-card";
+import { VatThresholdCard } from "./vat-threshold-card";
 
 type HistoryTransaction = Pick<
   Transaction,
@@ -771,6 +772,12 @@ export default function DashboardPage() {
           periodType={currentPeriodType ?? undefined}
           recurringMonthlyTotal={recurringMonthlyTotal}
         />
+
+        {/* VAT threshold widget — always tracks the CURRENT calendar
+            year, independently of the period dropdown above. Hidden
+            when the user has flagged themselves as already VAT-
+            registered (see `useVatStatus`). */}
+        <VatThresholdCard userId={userId} />
 
         <CashflowChart
           userId={userId}

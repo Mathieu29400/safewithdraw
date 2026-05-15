@@ -1,0 +1,19 @@
+Add VAT threshold dashboard widget (step 2/3)
+
+- New `lib/use-vat-status.ts` hook: loads urssaf_profile + YTD income
+  transactions filtered by calendar year, composes a VatStatus via
+  the pure `lib/vat.ts` engine, and stays live through realtime
+  subscriptions on both `transactions` and `urssaf_profile`.
+- New `app/dashboard/vat-threshold-card.tsx` widget with four visual
+  states (safe / warning / danger / exceeded) on a single morphing
+  surface. Hidden when the user is already VAT-registered. Always
+  visible regardless of the period dropdown — VAT thresholds are
+  calendar-year based, not URSSAF-period based.
+- New `app/dashboard/vat-explainer-dialog.tsx` modal with a
+  personalized example (1 000 EUR HT vs 1 200 EUR TTC) and the user's
+  actual seuil (41 250 EUR or 93 500 EUR HT).
+- Integrated into the dashboard between SafeWithdrawCard and the
+  cashflow chart so the cashflow context flows naturally into the
+  VAT context.
+
+No regression on the 101 existing Vitest cases; lint clean.
