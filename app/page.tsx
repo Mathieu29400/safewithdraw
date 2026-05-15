@@ -244,6 +244,62 @@ export default function HomePage() {
           </div>
         </section>
 
+        {/*
+          VAT threshold awareness section — pairs with the URSSAF
+          automatic-calculation card above. Same visual grammar (gradient,
+          icon-in-rounded-square, badge, h3, copy) so the two read as a
+          coherent "two automatic things SafeWithdraw does for you"
+          duo. Bell icon picks up the "alert / warning" semantic without
+          being anxiogène — the copy is deliberately reassuring per the
+          product positioning ("pour anticiper, pas pour paniquer").
+        */}
+        <section className="mt-12 sm:mt-16">
+          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-500/[0.12] via-slate-900/55 to-slate-900/55 p-6 ring-1 ring-emerald-400/30 backdrop-blur-xl sm:p-8">
+            <div
+              aria-hidden
+              className="pointer-events-none absolute -top-12 -right-12 h-48 w-48 rounded-full bg-emerald-500/15 blur-3xl"
+            />
+            <div className="relative flex flex-col items-start gap-5 sm:flex-row sm:items-center sm:gap-6">
+              <span
+                aria-hidden
+                className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-2xl bg-emerald-500/15 ring-1 ring-emerald-400/30"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="26"
+                  height="26"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="text-emerald-300"
+                >
+                  <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                  <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+                </svg>
+              </span>
+              <div className="min-w-0 flex-1">
+                <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-emerald-300 ring-1 ring-emerald-400/30">
+                  Suivi automatique
+                </span>
+                <h3 className="mt-3 text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl">
+                  Alerte seuil de TVA incluse
+                </h3>
+                <p className="mt-2 text-base text-slate-300 sm:text-lg">
+                  SafeWithdraw surveille en temps réel ton seuil de TVA
+                  (<span className="font-mono font-medium text-slate-100">41 250 €</span>{" "}
+                  ou{" "}
+                  <span className="font-mono font-medium text-slate-100">93 500 €</span>{" "}
+                  selon ton activité). On te prévient à temps pour anticiper,
+                  pas pour paniquer.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section className="mt-20 rounded-2xl bg-slate-900/45 p-6 ring-1 ring-white/10 backdrop-blur-xl sm:p-8">
           <h2 className="text-2xl font-semibold text-slate-100 sm:text-3xl">
             Pourquoi tu peux faire confiance aux calculs
@@ -339,6 +395,7 @@ export default function HomePage() {
           <ul className="mt-5 grid gap-3 text-slate-300 sm:grid-cols-2">
             <li>• Évite les erreurs URSSAF</li>
             <li>• Sait exactement combien se payer</li>
+            <li>• Anticipe le seuil de TVA sans surprise</li>
             <li>• Gagne du temps chaque semaine</li>
             <li>• Réduit le stress financier</li>
           </ul>

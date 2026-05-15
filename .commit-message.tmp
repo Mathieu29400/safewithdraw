@@ -1,0 +1,13 @@
+Add VAT threshold callout to landing page (step 3/3)
+
+- New "Alerte seuil de TVA incluse" section paired right after the
+  URSSAF automatic-calculation card. Same visual grammar (gradient,
+  bell icon-in-rounded-square, "Suivi automatique" badge) so the
+  two read as a coherent duo of platform-level automation.
+- Copy follows the validated option C tone (orientee pedagogie):
+  "On te previent a temps pour anticiper, pas pour paniquer".
+  Mentions both seuils (41 250 EUR / 93 500 EUR) so the message is
+  concrete without picking a side.
+- Added "Anticipe le seuil de TVA sans surprise" to the "Pourquoi
+  les freelances utilisent SafeWithdraw" bullet list to reinforce
+  the benefit in the closing section.
