@@ -251,7 +251,6 @@ export default function OnboardingPage() {
                     value="monthly"
                     label="Mensuel"
                     description="Déclaration et cotisations chaque mois"
-                    emoji="📅"
                     selected={declarationFrequency === "monthly"}
                     onSelect={() => setDeclarationFrequency("monthly")}
                   />
@@ -259,7 +258,6 @@ export default function OnboardingPage() {
                     value="quarterly"
                     label="Trimestriel"
                     description="Déclaration et cotisations par trimestre"
-                    emoji="📆"
                     selected={declarationFrequency === "quarterly"}
                     onSelect={() => setDeclarationFrequency("quarterly")}
                   />

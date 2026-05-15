@@ -12,8 +12,23 @@
  *
  * The activity catalog itself lives in `lib/urssaf-activities.ts`.
  * `ACTIVITY_VISUALS` is a UI-only enrichment map keyed on the stable
- * activity id — emoji + a shorter label tuned for the picker grid.
+ * activity id — Bootstrap icon component + a shorter label tuned for
+ * the picker grid. Bootstrap Icons keep the visual language sober and
+ * consistent across the app, instead of OS-rendered emojis that vary
+ * by platform and read as "AI-flavored" to users.
  */
+
+import type { ComponentType, SVGProps } from "react";
+import {
+  Bag,
+  CalendarRange,
+  Calendar3,
+  HouseDoor,
+  Laptop,
+  Mortarboard,
+  Sliders,
+  Tools,
+} from "react-bootstrap-icons";
 
 import type { PeriodType } from "@/lib/database.types";
 import {
@@ -21,36 +36,43 @@ import {
   type UrssafActivity,
 } from "@/lib/urssaf-activities";
 
+type IconComponent = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
+
 export const ACTIVITY_VISUALS: Record<
   string,
-  { emoji: string; title: string; subtitle: string }
+  { Icon: IconComponent; title: string; subtitle: string }
 > = {
   commerce: {
-    emoji: "🛍",
+    Icon: Bag,
     title: "Commerce",
     subtitle: "Achat et revente de biens",
   },
   "services-commerciaux-artisanaux": {
-    emoji: "🛠",
+    Icon: Tools,
     title: "Services commerciaux / artisanaux",
     subtitle: "Activité de service ou artisanat",
   },
   "freelance-prestations": {
-    emoji: "🧑‍💻",
+    Icon: Laptop,
     title: "Freelance / prestations de services",
     subtitle: "Activité digitale, conseil, freelance",
   },
   "professions-liberales-cipav": {
-    emoji: "🧾",
+    Icon: Mortarboard,
     title: "Professions libérales (CIPAV)",
     subtitle: "Professions réglementées",
   },
   "location-meublee-tourisme-classee": {
-    emoji: "🏠",
+    Icon: HouseDoor,
     title: "Location meublée de tourisme classée",
     subtitle: "Location courte durée",
   },
 };
+
+export const FREQUENCY_ICONS = {
+  monthly: Calendar3,
+  quarterly: CalendarRange,
+} as const satisfies Record<PeriodType, IconComponent>;
 
 export function ActivityCard({
   activity,
@@ -61,11 +83,10 @@ export function ActivityCard({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const visuals = ACTIVITY_VISUALS[activity.id] ?? {
-    emoji: "•",
-    title: activity.name,
-    subtitle: activity.description,
-  };
+  const visuals = ACTIVITY_VISUALS[activity.id];
+  const Icon = visuals?.Icon;
+  const title = visuals?.title ?? activity.name;
+  const subtitle = visuals?.subtitle ?? activity.description;
 
   return (
     <label
@@ -83,19 +104,24 @@ export function ActivityCard({
         onChange={onSelect}
         className="sr-only"
       />
-      <span aria-hidden className="text-2xl leading-none">
-        {visuals.emoji}
+      <span
+        aria-hidden
+        className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ring-1 transition-colors ${
+          selected
+            ? "bg-emerald-500/15 text-emerald-300 ring-emerald-400/30"
+            : "bg-white/5 text-slate-300 ring-white/10"
+        }`}
+      >
+        {Icon ? <Icon size={20} aria-hidden /> : <span className="text-base">•</span>}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-3">
-          <span className="text-sm font-medium text-slate-100">
-            {visuals.title}
-          </span>
+          <span className="text-sm font-medium text-slate-100">{title}</span>
           <span className="font-mono text-sm font-semibold text-emerald-300">
             {formatPercent(activity.rate)}
           </span>
         </div>
-        <p className="mt-1 text-xs text-slate-400">{visuals.subtitle}</p>
+        <p className="mt-1 text-xs text-slate-400">{subtitle}</p>
       </div>
     </label>
   );
@@ -132,8 +158,15 @@ export function CustomActivityCard({
         onChange={onSelect}
         className="sr-only"
       />
-      <span aria-hidden className="text-2xl leading-none">
-        ⚙️
+      <span
+        aria-hidden
+        className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ring-1 transition-colors ${
+          selected
+            ? "bg-emerald-500/15 text-emerald-300 ring-emerald-400/30"
+            : "bg-white/5 text-slate-300 ring-white/10"
+        }`}
+      >
+        <Sliders size={20} aria-hidden />
       </span>
       <div className="min-w-0 flex-1">
         <span className="text-sm font-medium text-slate-100">
@@ -194,17 +227,16 @@ export function FrequencyCard({
   value,
   label,
   description,
-  emoji,
   selected,
   onSelect,
 }: {
   value: PeriodType;
   label: string;
   description: string;
-  emoji: string;
   selected: boolean;
   onSelect: () => void;
 }) {
+  const Icon = FREQUENCY_ICONS[value];
   return (
     <label
       className={`relative flex h-full cursor-pointer items-start gap-3 rounded-2xl p-5 transition-all duration-200 ease-out motion-safe:active:scale-[0.98] ${
@@ -221,8 +253,15 @@ export function FrequencyCard({
         onChange={onSelect}
         className="sr-only"
       />
-      <span aria-hidden className="text-2xl leading-none">
-        {emoji}
+      <span
+        aria-hidden
+        className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ring-1 transition-colors ${
+          selected
+            ? "bg-emerald-500/15 text-emerald-300 ring-emerald-400/30"
+            : "bg-white/5 text-slate-300 ring-white/10"
+        }`}
+      >
+        <Icon size={20} aria-hidden />
       </span>
       <div className="min-w-0 flex-1">
         <span className="text-sm font-medium text-slate-100">{label}</span>

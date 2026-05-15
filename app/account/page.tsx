@@ -676,7 +676,6 @@ function UrssafSection({ userId }: { userId: string }) {
                 value="monthly"
                 label="Mensuel"
                 description="Déclaration et cotisations chaque mois"
-                emoji="📅"
                 selected={declarationFrequency === "monthly"}
                 onSelect={() => setDeclarationFrequency("monthly")}
               />
@@ -684,7 +683,6 @@ function UrssafSection({ userId }: { userId: string }) {
                 value="quarterly"
                 label="Trimestriel"
                 description="Déclaration et cotisations par trimestre"
-                emoji="📆"
                 selected={declarationFrequency === "quarterly"}
                 onSelect={() => setDeclarationFrequency("quarterly")}
               />
