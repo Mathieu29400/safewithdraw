@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -8,6 +8,9 @@ import {
   CustomActivityCard,
   FrequencyCard,
   parseRatePercent,
+  VatRegistrationPicker,
+  vatChoiceToBoolean,
+  type VatRegistrationChoice,
 } from "@/app/_components/urssaf-picker";
 import type { PeriodType } from "@/lib/database.types";
 import { ensureProfile } from "@/lib/ensure-profile";
@@ -16,6 +19,7 @@ import {
   CUSTOM_ACTIVITY_ID,
   URSSAF_ACTIVITIES,
   type UrssafActivity,
+  type VatCategory,
 } from "@/lib/urssaf-activities";
 
 type SelectedActivityId = UrssafActivity["id"] | typeof CUSTOM_ACTIVITY_ID;
@@ -33,8 +37,33 @@ export default function OnboardingPage() {
   const [customRatePercent, setCustomRatePercent] = useState("");
   const [declarationFrequency, setDeclarationFrequency] =
     useState<PeriodType>("monthly");
+  // Tri-state UI choice; persisted as a boolean (see vatChoiceToBoolean).
+  // Defaults to "no" because the overwhelming majority of fresh micro-
+  // entrepreneurs are in franchise en base de TVA. Users who already
+  // invoice VAT have to actively flip to "yes", which mirrors reality.
+  const [vatChoice, setVatChoice] = useState<VatRegistrationChoice>("no");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Personalize the VAT explainer based on the user's Étape 1 pick:
+  // preset → use the catalog's vatCategory + name; custom → default to
+  // "services" (which is `null` here so the picker falls back to the
+  // generic copy until the user types their custom activity name).
+  const vatCategoryForSelection = useMemo<VatCategory | null>(() => {
+    if (selectedId === null) return null;
+    if (selectedId === CUSTOM_ACTIVITY_ID) return "services";
+    return (
+      URSSAF_ACTIVITIES.find((a) => a.id === selectedId)?.vatCategory ?? null
+    );
+  }, [selectedId]);
+
+  const selectedActivityLabel = useMemo<string | null>(() => {
+    if (selectedId === null) return null;
+    if (selectedId === CUSTOM_ACTIVITY_ID) {
+      return customName.trim() || null;
+    }
+    return URSSAF_ACTIVITIES.find((a) => a.id === selectedId)?.name ?? null;
+  }, [selectedId, customName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,6 +161,7 @@ export default function OnboardingPage() {
       activity_type: activityType,
       urssaf_rate: urssafRate,
       declaration_frequency: declarationFrequency,
+      is_vat_registered: vatChoiceToBoolean(vatChoice),
     });
 
     if (insertError) {
@@ -263,6 +293,31 @@ export default function OnboardingPage() {
                   />
                 </div>
               </fieldset>
+            </div>
+
+            <div className="border-t border-white/10 pt-8">
+              <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-emerald-300 ring-1 ring-emerald-400/20">
+                Étape 3
+              </span>
+              <h2 className="mt-4 text-xl font-semibold tracking-tight text-slate-50 sm:text-2xl">
+                Tu factures actuellement la TVA à tes clients&nbsp;?
+              </h2>
+              <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                Si tu viens de créer ton activité, la réponse est probablement
+                non — en micro-entreprise tu es exonéré de TVA jusqu’à un
+                certain chiffre d’affaires.{" "}
+                <span className="text-slate-300">
+                  SafeWithdraw te préviendra quand tu t’en approcheras.
+                </span>
+              </p>
+              <div className="mt-6">
+                <VatRegistrationPicker
+                  value={vatChoice}
+                  onChange={setVatChoice}
+                  category={vatCategoryForSelection}
+                  activityLabel={selectedActivityLabel}
+                />
+              </div>
             </div>
 
             <p className="text-xs text-slate-500">

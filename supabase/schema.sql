@@ -148,13 +148,20 @@ create table if not exists public.urssaf_profile (
   activity_type text          not null,
   urssaf_rate   numeric(5,4)  not null check (urssaf_rate >= 0 and urssaf_rate <= 1),
   declaration_frequency text not null default 'monthly'
-    check (declaration_frequency in ('monthly', 'quarterly'))
+    check (declaration_frequency in ('monthly', 'quarterly')),
+  -- `true`  → user already invoices VAT, the threshold alert is silenced.
+  -- `false` → user is in franchise en base, we surveil the annual threshold.
+  is_vat_registered boolean not null default false
 );
 
 -- Backfill `declaration_frequency` on pre-existing databases.
 alter table public.urssaf_profile
   add column if not exists declaration_frequency text not null default 'monthly'
     check (declaration_frequency in ('monthly', 'quarterly'));
+
+-- Backfill `is_vat_registered` on pre-existing databases.
+alter table public.urssaf_profile
+  add column if not exists is_vat_registered boolean not null default false;
 
 -- =============================================================================
 -- 4. periods

@@ -193,18 +193,28 @@ export type Database = {
           activity_type: string;
           urssaf_rate: number;
           declaration_frequency: PeriodType;
+          /**
+           * `true` → user already invoices VAT (volontaire ou par
+           * dépassement antérieur). The dashboard's TVA threshold
+           * alert is silenced in this case.
+           * `false` (default) → user is in franchise en base de TVA;
+           * we surveil the annual revenue against the seuil majoré.
+           */
+          is_vat_registered: boolean;
         };
         Insert: {
           user_id: string;
           activity_type: string;
           urssaf_rate: number;
           declaration_frequency?: PeriodType;
+          is_vat_registered?: boolean;
         };
         Update: {
           user_id?: string;
           activity_type?: string;
           urssaf_rate?: number;
           declaration_frequency?: PeriodType;
+          is_vat_registered?: boolean;
         };
         Relationships: [
           {

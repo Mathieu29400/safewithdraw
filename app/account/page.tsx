@@ -17,13 +17,19 @@ import {
   FrequencyCard,
   formatPercent,
   parseRatePercent,
+  VatRegistrationPicker,
+  vatChoiceFromBoolean,
+  vatChoiceToBoolean,
+  type VatRegistrationChoice,
 } from "@/app/_components/urssaf-picker";
 import type { PeriodType } from "@/lib/database.types";
 import { supabase } from "@/lib/supabase";
 import {
   CUSTOM_ACTIVITY_ID,
   URSSAF_ACTIVITIES,
+  type VatCategory,
 } from "@/lib/urssaf-activities";
+import { getVatCategoryForActivity } from "@/lib/vat";
 
 type SelectedActivityId = string;
 
@@ -114,6 +120,7 @@ export default function AccountPage() {
         <AccountInfoSection email={email} />
         <PasswordSection />
         <UrssafSection userId={userId} />
+        <VatRegistrationSection userId={userId} />
         <ExportSection userId={userId} email={email} />
         <DangerZoneSection accessToken={accessToken} />
       </main>
@@ -819,7 +826,141 @@ function UrssafSection({ userId }: { userId: string }) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 4. Mes données — export RGPD                                                */
+/* 4. TVA — registration status                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Standalone section for the VAT registration flag. Kept separate from
+ * `UrssafSection` because:
+ *   1. Changing VAT status is NOT destructive — we don't wipe the
+ *      dashboard like we do on activity / frequency changes.
+ *   2. It has its own pedagogical UI (the explainer panel) that we
+ *      want to surface even when the user only edits this one toggle.
+ *
+ * Loads `is_vat_registered` from `urssaf_profile`, lets the user
+ * toggle it via the tri-state picker, and persists back as a boolean
+ * with a regular upsert (no migration risk because the column has a
+ * default and is filled by the onboarding flow as well).
+ */
+function VatRegistrationSection({ userId }: { userId: string }) {
+  const [loaded, setLoaded] = useState(false);
+  const [choice, setChoice] = useState<VatRegistrationChoice>("no");
+  const [initialBoolean, setInitialBoolean] = useState<boolean | null>(null);
+  // Activity context — fetched alongside the flag so the explainer
+  // panel can personalize ("Dans ton cas (Freelance) ton seuil est
+  // 41 250 €"). Falls back to null when there's no profile row yet
+  // (which makes the picker render the generic copy).
+  const [activityLabel, setActivityLabel] = useState<string | null>(null);
+  const [vatCategory, setVatCategory] = useState<VatCategory | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    supabase
+      .from("urssaf_profile")
+      .select("is_vat_registered, activity_type")
+      .eq("user_id", userId)
+      .maybeSingle()
+      .then(({ data, error: fetchError }) => {
+        if (cancelled) return;
+        if (fetchError) {
+          setError(fetchError.message);
+          setLoaded(true);
+          return;
+        }
+        // Pre-onboarding rows can be missing; default to "no" which
+        // matches the column's DEFAULT FALSE in Postgres.
+        const initial = data?.is_vat_registered ?? false;
+        setInitialBoolean(initial);
+        setChoice(vatChoiceFromBoolean(initial));
+        if (data?.activity_type) {
+          setActivityLabel(data.activity_type);
+          setVatCategory(getVatCategoryForActivity(data.activity_type));
+        }
+        setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  const hasChanges = useMemo(() => {
+    if (initialBoolean === null) return false;
+    return vatChoiceToBoolean(choice) !== initialBoolean;
+  }, [choice, initialBoolean]);
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setError(null);
+    setDone(false);
+
+    if (!hasChanges) {
+      setError("Aucun changement à enregistrer.");
+      return;
+    }
+
+    setSubmitting(true);
+    const { error: updateError } = await supabase
+      .from("urssaf_profile")
+      .update({ is_vat_registered: vatChoiceToBoolean(choice) })
+      .eq("user_id", userId);
+
+    if (updateError) {
+      setSubmitting(false);
+      setError(updateError.message);
+      return;
+    }
+
+    setInitialBoolean(vatChoiceToBoolean(choice));
+    setSubmitting(false);
+    setDone(true);
+  };
+
+  return (
+    <Section
+      title="TVA"
+      description="Indique si tu factures actuellement la TVA. SafeWithdraw t’avertira automatiquement quand tu approcheras du seuil si tu en es exonéré."
+    >
+      {!loaded ? (
+        <p className="text-sm text-slate-500">Chargement…</p>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-6" noValidate>
+          <VatRegistrationPicker
+            value={choice}
+            onChange={setChoice}
+            category={vatCategory}
+            activityLabel={activityLabel}
+          />
+
+          {error && (
+            <div className="rounded-lg border border-rose-500/30 bg-rose-950/50 px-3 py-2 text-sm text-rose-200">
+              {error}
+            </div>
+          )}
+
+          {done && (
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-950/50 px-3 py-2 text-sm text-emerald-200">
+              Statut TVA mis à jour.
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={submitting || !hasChanges}
+            className="inline-flex items-center justify-center rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-medium text-white shadow-[0_8px_24px_-8px_rgba(16,185,129,0.6)] transition hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:ring-offset-2 focus:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {submitting ? "Enregistrement…" : "Enregistrer"}
+          </button>
+        </form>
+      )}
+    </Section>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* 5. Mes données — export RGPD                                                */
 /* -------------------------------------------------------------------------- */
 
 function ExportSection({
@@ -962,7 +1103,7 @@ function ExportSection({
 }
 
 /* -------------------------------------------------------------------------- */
-/* 5. Zone danger — suppression de compte                                      */
+/* 6. Zone danger — suppression de compte                                      */
 /* -------------------------------------------------------------------------- */
 
 const DELETE_CONFIRM_WORD = "SUPPRIMER";
